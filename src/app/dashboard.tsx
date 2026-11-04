@@ -81,6 +81,12 @@ export default function DashboardScreen() {
     else loadQuotes();
   };
 
+  const openChat = async (quoteId: string) => {
+    const { data, error } = await supabase.rpc('start_quote_chat', { p_quote_id: quoteId });
+    if (error || !data) return Alert.alert('Chat indisponible', error?.message ?? 'Réessayez plus tard.');
+    router.push({ pathname: '/messages', params: { c: (data as { id: string }).id } });
+  };
+
   const isNew = (q: Quote) => q.status === 'assigned' || q.status === 'pending';
   const count = (s: Quote['status']) => quotes.filter((q) => q.status === s).length;
   const revenue = quotes
@@ -149,6 +155,7 @@ export default function DashboardScreen() {
           <QuoteCard key={q.id} quote={q}>
             <ActionButton label="Accepter" color="#34C759" onPress={() => respond(q.id, 'accept')} />
             <ActionButton label="Refuser" color="#FF3B30" onPress={() => respond(q.id, 'reject')} />
+            <ActionButton label="Chat" color="#5856D6" onPress={() => openChat(q.id)} />
           </QuoteCard>
         ))}
 
@@ -157,6 +164,7 @@ export default function DashboardScreen() {
         {accepted.map((q) => (
           <QuoteCard key={q.id} quote={q}>
             <ActionButton label="Marquer terminé" color="#007AFF" onPress={() => respond(q.id, 'complete')} />
+            <ActionButton label="Chat" color="#5856D6" onPress={() => openChat(q.id)} />
           </QuoteCard>
         ))}
 

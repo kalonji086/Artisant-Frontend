@@ -14,8 +14,10 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase-client';
 import { useAuth } from '@/lib/auth-context';
-import { formatDistance, getCurrentCoords, saveMyLocation } from '@/lib/location';
+import { formatDistance, getCurrentCoords, saveMyLocation, type Coords } from '@/lib/location';
 import { PROFESSIONS } from '@/lib/professions';
+import { errorMessage } from '@/lib/errors';
+import { ArtisanMap } from '@/components/artisan-map';
 
 type NearbyArtisan = {
   id: string;
@@ -25,6 +27,8 @@ type NearbyArtisan = {
   city: string | null;
   rating: number | null;
   distance_m: number;
+  latitude: number;
+  longitude: number;
 };
 
 const RADIUS_METERS = 50000;
@@ -37,6 +41,8 @@ export default function HomeScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [me, setMe] = useState<Coords | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -44,9 +50,11 @@ export default function HomeScreen() {
       const coords = await getCurrentCoords();
       if (!coords) {
         setArtisans([]);
+        setMe(null);
         setError('Activez la localisation pour voir les artisans proches de vous.');
         return;
       }
+      setMe(coords);
       void saveMyLocation(coords);
       const { data, error: rpcError } = await supabase.rpc('nearby_artisans', {
         lat: coords.latitude,
@@ -57,7 +65,8 @@ export default function HomeScreen() {
       if (rpcError) throw rpcError;
       setArtisans((data as NearbyArtisan[]) ?? []);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Impossible de charger les artisans.');
+      setArtisans([]);
+      setError(`Impossible de charger les artisans : ${errorMessage(err, 'erreur inconnue')}`);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -106,6 +115,22 @@ export default function HomeScreen() {
           data={artisans}
           keyExtractor={(a) => a.id}
           contentContainerStyle={styles.list}
+          ListHeaderComponent={
+            <View style={styles.mapWrap}>
+              {me ? (
+                <ArtisanMap center={me} artisans={artisans} onSelect={setSelectedId} />
+              ) : (
+                <TouchableOpacity style={styles.mapPlaceholder} onPress={load}>
+                  <Ionicons name="location-outline" size={28} color="#007AFF" />
+                  <Text style={styles.empty}>Activez le GPS pour voir la carte. Touchez pour réessayer.</Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity style={styles.requestBtn} onPress={() => router.push('/quotes')}>
+                <Ionicons name="document-text" size={18} color="#fff" />
+                <Text style={styles.dashButtonText}>Demander un devis</Text>
+              </TouchableOpacity>
+            </View>
+          }
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -121,7 +146,7 @@ export default function HomeScreen() {
             </Text>
           }
           renderItem={({ item }) => (
-            <View style={styles.card}>
+            <View style={[styles.card, selectedId === item.id && styles.cardSelected]}>
               <View style={styles.avatar}>
                 <Ionicons name="person" size={24} color="#007AFF" />
               </View>
@@ -164,6 +189,10 @@ const styles = StyleSheet.create({
   chipText: { color: '#444' },
   chipTextActive: { color: '#fff', fontWeight: '600' },
   list: { padding: 20, gap: 12, flexGrow: 1 },
+  mapWrap: { gap: 12 },
+  mapPlaceholder: { height: 160, borderRadius: 12, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', padding: 16 },
+  requestBtn: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 8, backgroundColor: '#007AFF', paddingVertical: 12, borderRadius: 10 },
+  cardSelected: { borderWidth: 2, borderColor: '#FF6B00' },
   empty: { textAlign: 'center', color: '#666', marginTop: 40 },
   card: { flexDirection: 'row', gap: 12, backgroundColor: '#fff', borderRadius: 12, padding: 14, alignItems: 'center' },
   avatar: { width: 48, height: 48, borderRadius: 24, backgroundColor: '#E6F0FF', alignItems: 'center', justifyContent: 'center' },
