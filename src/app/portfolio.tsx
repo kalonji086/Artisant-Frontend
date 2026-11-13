@@ -70,6 +70,7 @@ export default function PortfolioScreen() {
   const canManage = managerMode && profile?.role === 'artisan' && profile.id === artisanId;
 
   const [projects, setProjects] = useState<Project[]>([]);
+  const [portfolioClaimed, setPortfolioClaimed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [working, setWorking] = useState(false);
@@ -83,6 +84,7 @@ export default function PortfolioScreen() {
   const loadProjects = useCallback(async () => {
     if (!artisanId) {
       setProjects([]);
+      setPortfolioClaimed(false);
       setArtisanProfession(null);
       setLoading(false);
       setRefreshing(false);
@@ -103,6 +105,13 @@ export default function PortfolioScreen() {
       ]);
       if (projectsResult.error) throw projectsResult.error;
       if (profileResult.error) throw profileResult.error;
+      let claimed = false;
+      if (canManage) {
+        const { data, error } = await supabase.rpc('has_artisan_portfolio_claim');
+        if (error) throw error;
+        claimed = data === true;
+      }
+      setPortfolioClaimed(claimed);
       const rows = projectsResult.data;
       setArtisanProfession(profileResult.data?.profession ?? null);
 
@@ -229,6 +238,10 @@ export default function PortfolioScreen() {
       Alert.alert('Accès réservé', 'Seul un artisan peut publier une réalisation.');
       return;
     }
+    if (portfolioClaimed || projects.length > 0) {
+      Alert.alert('Portfolio déjà créé', 'Un seul portfolio peut être publié par artisan.');
+      return;
+    }
     if (!title.trim() || !description.trim() || photos.length === 0) {
       Alert.alert('Informations manquantes', 'Ajoutez un titre, une description et au moins une photo.');
       return;
@@ -287,11 +300,8 @@ export default function PortfolioScreen() {
         if (deleteError) cleanupErrors.push(deleteError.message);
       }
       console.error('[portfolio] publication impossible:', error);
-      if (error instanceof Error && error.message.includes('PUBLICATION_QUOTA_REACHED')) {
-        Alert.alert('Quota atteint', 'Votre offre ne permet plus de publier ce mois-ci. Choisissez une offre supérieure.', [
-          { text: 'Voir les offres', onPress: () => router.push('/subscriptions') },
-          { text: 'Plus tard', style: 'cancel' },
-        ]);
+      if (error instanceof Error && error.message.includes('PORTFOLIO_ALREADY_CREATED')) {
+        Alert.alert('Portfolio déjà créé', 'Un seul portfolio peut être publié par artisan.');
         setWorking(false);
         return;
       }
@@ -323,6 +333,10 @@ export default function PortfolioScreen() {
     if (!requireLogin()) return;
     if (!canManage || !session?.user.id) {
       Alert.alert('Accès réservé', 'Seul un artisan peut importer une réalisation.');
+      return;
+    }
+    if (portfolioClaimed || projects.length > 0) {
+      Alert.alert('Portfolio déjà créé', 'Un seul portfolio peut être publié par artisan.');
       return;
     }
     if (!title.trim() || !description.trim()) {
@@ -382,20 +396,17 @@ export default function PortfolioScreen() {
       await loadProjects();
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Réessayez plus tard.';
-      if (message.toLowerCase().includes('quota mensuel')) {
-        Alert.alert('Quota atteint', message, [
-          { text: 'Voir les offres', onPress: () => router.push('/subscriptions') },
-          { text: 'Plus tard', style: 'cancel' },
-        ]);
-      } else {
-        Alert.alert('Import impossible', message);
-      }
+      Alert.alert('Import impossible', message);
     } finally {
       setWorking(false);
     }
   };
 
   const publishDraft = async (project: Project) => {
+    if (portfolioClaimed) {
+      Alert.alert('Portfolio déjà créé', 'Un seul portfolio peut être publié par artisan.');
+      return;
+    }
     if (project.media.length === 0) {
       Alert.alert('Photos manquantes', 'Ajoutez au moins une photo avant de publier cette réalisation.');
       return;
@@ -407,11 +418,8 @@ export default function PortfolioScreen() {
       if (error) throw error;
       await loadProjects();
     } catch (error) {
-      if (error instanceof Error && error.message.includes('PUBLICATION_QUOTA_REACHED')) {
-        Alert.alert('Quota atteint', 'Votre offre ne permet plus de publier ce mois-ci. Choisissez une offre supérieure.', [
-          { text: 'Voir les offres', onPress: () => router.push('/subscriptions') },
-          { text: 'Plus tard', style: 'cancel' },
-        ]);
+      if (error instanceof Error && error.message.includes('PORTFOLIO_ALREADY_CREATED')) {
+        Alert.alert('Portfolio déjà créé', 'Un seul portfolio peut être publié par artisan.');
       } else {
         Alert.alert('Publication impossible', error instanceof Error ? error.message : 'Réessayez plus tard.');
       }
@@ -619,7 +627,11 @@ export default function PortfolioScreen() {
         </View>
         <Text style={styles.pageTitle}>{titleText}</Text>
 
-        {canManage && (
+        {canManage && portfolioClaimed && (
+          <Text style={styles.helpText}>Votre portfolio a déjà été publié. Un seul portfolio peut être publié par artisan.</Text>
+        )}
+
+        {canManage && !portfolioClaimed && projects.length === 0 && (
           <View style={styles.formCard}>
             <Text style={styles.sectionTitle}>Publier un travail</Text>
             <Text style={styles.helpText}>Créez un PowerPoint à partir de vos photos ou importez une présentation .pptx existante.</Text>
@@ -732,7 +744,7 @@ export default function PortfolioScreen() {
 
             {canManage && (
               <View style={styles.manageRow}>
-                {project.status === 'draft' ? (
+                {project.status === 'draft' && !portfolioClaimed ? (
                   <TouchableOpacity
                     style={[styles.primaryButton, styles.publishDraftButton]}
                     onPress={() => void publishDraft(project)}
@@ -750,9 +762,11 @@ export default function PortfolioScreen() {
                     <Text style={styles.secondaryButtonText}>{project.pptx_path ? 'Ouvrir le PowerPoint' : 'Générer le PowerPoint'}</Text>
                   </TouchableOpacity>
                 )}
-                <TouchableOpacity style={styles.deleteButton} onPress={() => deleteProject(project)} disabled={working}>
-                  <Ionicons name="trash-outline" size={18} color="#FF3B30" />
-                </TouchableOpacity>
+                {project.status === 'draft' && (
+                  <TouchableOpacity style={styles.deleteButton} onPress={() => deleteProject(project)} disabled={working}>
+                    <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                  </TouchableOpacity>
+                )}
               </View>
             )}
           </View>

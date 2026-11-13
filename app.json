@@ -42,7 +42,6 @@
     "plugins": [
       "expo-router",
       "expo-updates",
-      "expo-iap",
       [
         "expo-build-properties",
         {

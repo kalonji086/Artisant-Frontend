@@ -213,12 +213,11 @@ function DashboardContent() {
   const drawerItems: {
     label: string;
     icon: keyof typeof Ionicons.glyphMap;
-    href?: '/messages' | '/notifications' | '/' | '/profile' | '/settings' | '/subscriptions';
-    section?: 'top' | 'requests';
+    href?: '/messages' | '/notifications' | '/' | '/profile' | '/settings' | '/portfolio';
+    section?: 'requests';
   }[] = [
-    { label: 'Tableau de bord', icon: 'grid-outline', section: 'top' },
     { label: 'Demandes reçues', icon: 'briefcase-outline', section: 'requests' },
-    { label: 'Abonnement', icon: 'card-outline', href: '/subscriptions' },
+    { label: 'Mes réalisations', icon: 'images-outline', href: '/portfolio' },
     { label: 'Messages', icon: 'chatbubbles-outline', href: '/messages' },
     { label: 'Notifications', icon: 'notifications-outline', href: '/notifications' },
     { label: 'Accueil et carte', icon: 'map-outline', href: '/' },
@@ -299,24 +298,6 @@ function DashboardContent() {
           <Stat label="Terminées" value={count('completed')} color="#34C759" />
           <Stat label="Revenus" value={formatAmount(revenue)} color="#5856D6" />
         </View>
-
-        <TouchableOpacity style={styles.portfolioButton} onPress={() => router.push('/portfolio')}>
-          <Ionicons name="images-outline" size={20} color="#fff" />
-          <View style={styles.center}>
-            <Text style={styles.portfolioButtonTitle}>Mes réalisations</Text>
-            <Text style={styles.portfolioButtonSubtitle}>Publier des photos ou importer un PowerPoint</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={18} color="#fff" />
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.subscriptionButton} onPress={() => router.push('/subscriptions')}>
-          <Ionicons name="card-outline" size={20} color="#fff" />
-          <View style={styles.center}>
-            <Text style={styles.portfolioButtonTitle}>Mon abonnement</Text>
-            <Text style={styles.portfolioButtonSubtitle}>Comparer les offres et suivre mon quota</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={18} color="#fff" />
-        </TouchableOpacity>
 
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Activité des 7 derniers jours</Text>
@@ -425,16 +406,14 @@ function DashboardContent() {
               </TouchableOpacity>
             </View>
             <Text style={styles.drawerSection}>ESPACE ARTISAN</Text>
-            {drawerItems.map((item, index) => (
+            {drawerItems.map((item) => (
               <TouchableOpacity
                 key={`${item.href}-${item.label}`}
-                style={[styles.drawerItem, index === 1 && styles.drawerDivider]}
+                style={[styles.drawerItem, item.section === 'requests' && styles.drawerDivider]}
                 onPress={() => {
                   setDrawerVisible(false);
                   if (item.section === 'requests') {
                     scrollRef.current?.scrollTo({ y: requestsOffset.current, animated: true });
-                  } else if (item.section === 'top') {
-                    scrollRef.current?.scrollTo({ y: 0, animated: true });
                   } else if (item.href) {
                     router.push(item.href);
                   }
@@ -531,10 +510,6 @@ const styles = themedStyles({
   metaLabel: { fontSize: 12, color: '#007AFF', fontWeight: '600', marginBottom: 2 },
   muted: { fontSize: 14, color: '#666' },
   stats: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
-  portfolioButton: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#007AFF', borderRadius: 12, padding: 14 },
-  subscriptionButton: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#5856D6', borderRadius: 12, padding: 14 },
-  portfolioButtonTitle: { color: '#fff', fontSize: 15, fontWeight: '700' },
-  portfolioButtonSubtitle: { color: '#eaf3ff', fontSize: 12, marginTop: 3 },
   stat: { flexGrow: 1, flexBasis: '45%', backgroundColor: '#fff', borderRadius: 12, padding: 16 },
   statValue: { fontSize: 24, fontWeight: 'bold' },
   statLabel: { fontSize: 13, color: '#666', marginTop: 2 },

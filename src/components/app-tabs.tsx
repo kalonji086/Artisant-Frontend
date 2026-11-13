@@ -93,7 +93,15 @@ export default function AppTabs() {
       />
       <Tabs.Screen name="settings" options={{ href: null, title: t('tab.settings'), tabBarStyle: { display: 'none' } }} />
       <Tabs.Screen name="notifications" options={{ href: null, title: 'Notifications', tabBarStyle: { display: 'none' } }} />
-      <Tabs.Screen name="subscriptions" options={{ href: null, title: 'Abonnements', tabBarStyle: { display: 'none' } }} />
+      <Tabs.Screen
+        name="portfolio"
+        options={{
+          href: null,
+          title: 'Mes réalisations',
+          tabBarButton: () => null,
+          tabBarStyle: { display: 'none' },
+        }}
+      />
       <Tabs.Screen name="proposal" options={{ href: null, title: 'Devis professionnel', tabBarStyle: { display: 'none' } }} />
       {/* Écrans d'authentification : accessibles via navigation, cachés des onglets */}
       <Tabs.Screen
