@@ -1,8 +1,8 @@
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useColorScheme, type ColorValue } from 'react-native';
+import { type ColorValue } from 'react-native';
 
-import { Colors } from '@/constants/theme';
+import { useSettings } from '@/lib/settings-context';
 import { useAuth } from '@/lib/auth-context';
 
 const TAB_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
@@ -25,23 +25,23 @@ function tabIcon(routeName: string, color: ColorValue, size: number) {
 }
 
 export default function AppTabs() {
-  const scheme = useColorScheme();
-  const colors = Colors[scheme === 'unspecified' ? 'light' : scheme];
-  const { profile } = useAuth();
-  const isArtisan = profile?.role === 'artisan';
+  const { colors: c, accent, t } = useSettings();
+  const { role } = useAuth();
+  const isArtisan = role === 'artisan';
 
   return (
     <Tabs
+      backBehavior="history"
       screenOptions={{
-        tabBarActiveTintColor: colors.text,
-        tabBarInactiveTintColor: colors.textSecondary,
-        tabBarStyle: { backgroundColor: colors.background },
+        tabBarActiveTintColor: accent,
+        tabBarInactiveTintColor: c.muted,
+        tabBarStyle: { backgroundColor: c.card, borderTopColor: c.border },
         headerShown: false,
       }}>
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Accueil',
+          title: t('tab.home'),
           tabBarIcon: ({ color, size }) => tabIcon('index', color, size),
         }}
       />
@@ -57,7 +57,7 @@ export default function AppTabs() {
         name="dashboard"
         options={{
           href: isArtisan ? undefined : null,
-          title: 'Dashboard',
+          title: t('tab.dashboard'),
           tabBarIcon: ({ color, size }) => tabIcon('dashboard', color, size),
         }}
       />
@@ -65,21 +65,21 @@ export default function AppTabs() {
         name="quotes"
         options={{
           href: isArtisan ? null : undefined,
-          title: 'Mes devis',
+          title: t('tab.quotes'),
           tabBarIcon: ({ color, size }) => tabIcon('quotes', color, size),
         }}
       />
       <Tabs.Screen
         name="messages"
         options={{
-          title: 'Messages',
+          title: t('tab.messages'),
           tabBarIcon: ({ color, size }) => tabIcon('messages', color, size),
         }}
       />
       <Tabs.Screen
         name="profile"
         options={{
-          title: 'Profil',
+          title: t('tab.profile'),
           tabBarIcon: ({ color, size }) => tabIcon('profile', color, size),
         }}
       />
@@ -91,12 +91,24 @@ export default function AppTabs() {
           title: 'Recherche',
         }}
       />
+      <Tabs.Screen name="settings" options={{ href: null, title: t('tab.settings'), tabBarStyle: { display: 'none' } }} />
+      <Tabs.Screen name="notifications" options={{ href: null, title: 'Notifications', tabBarStyle: { display: 'none' } }} />
+      <Tabs.Screen name="subscriptions" options={{ href: null, title: 'Abonnements', tabBarStyle: { display: 'none' } }} />
+      <Tabs.Screen name="proposal" options={{ href: null, title: 'Devis professionnel', tabBarStyle: { display: 'none' } }} />
       {/* Écrans d'authentification : accessibles via navigation, cachés des onglets */}
       <Tabs.Screen
         name="(auth)/login"
         options={{
           href: null,
           title: 'Connexion',
+          tabBarStyle: { display: 'none' },
+        }}
+      />
+      <Tabs.Screen
+        name="(auth)/forgot-password"
+        options={{
+          href: null,
+          title: 'Mot de passe oublié',
           tabBarStyle: { display: 'none' },
         }}
       />

@@ -1,0 +1,21 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.restorecredentials'
+version = '1.0.0'
+
+android {
+  namespace 'expo.modules.restorecredentials'
+  defaultConfig {
+    minSdk 24
+    versionName '1.0.0'
+  }
+}
+
+dependencies {
+  implementation 'androidx.credentials:credentials:1.7.0-alpha03'
+  implementation 'androidx.credentials:credentials-play-services-auth:1.7.0-alpha03'
+  implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1'
+}

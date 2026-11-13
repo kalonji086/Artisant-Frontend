@@ -1,5 +1,6 @@
+import { useSettings } from '@/lib/settings-context';
 import { useEffect, useState } from 'react';
-import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
+import { Animated, Easing, StyleSheet, View } from 'react-native';
 import { AppLogo } from '@/components/app-logo';
 
 type Props = {
@@ -10,6 +11,7 @@ type Props = {
 };
 
 export function SplashLoader({ ready, onDone, minDuration = 2200 }: Props) {
+  useSettings();
   const [progress] = useState(() => new Animated.Value(0));
   const [opacity] = useState(() => new Animated.Value(1));
   const [minElapsed, setMinElapsed] = useState(false);
@@ -47,7 +49,6 @@ export function SplashLoader({ ready, onDone, minDuration = 2200 }: Props) {
   return (
     <Animated.View style={[styles.root, { opacity }]}>
       <AppLogo size={150} />
-      <Text style={styles.name}>Artisants</Text>
       <View style={styles.track}>
         <Animated.View style={[styles.fill, { width }]} />
       </View>
@@ -68,7 +69,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 16,
   },
-  name: { fontSize: 26, fontWeight: 'bold', color: '#222' },
   track: {
     width: '55%',
     height: 6,

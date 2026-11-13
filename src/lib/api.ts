@@ -48,7 +48,7 @@ const request = async (
       headers,
     });
 
-    if (response.status === 401) {
+    if (response.status === 401 && endpoint !== '/auth/login') {
       throw new ApiError('Session expirée. Veuillez vous reconnecter.', 401);
     }
 

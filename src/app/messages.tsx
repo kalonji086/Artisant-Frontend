@@ -1,10 +1,12 @@
+import { useSettings } from '@/lib/settings-context';
+import { themedStyles } from '@/lib/themed-styles';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
-  StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
@@ -15,7 +17,9 @@ import { useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase-client';
 import { useAuth } from '@/lib/auth-context';
+import { useResponsive } from '@/lib/responsive';
 import { errorMessage } from '@/lib/errors';
+import { INPUT_PROPS } from '@/lib/input-colors';
 
 const SUPPORT_NAME = 'Artisant';
 
@@ -35,23 +39,54 @@ type Message = {
   sender_is_admin: boolean;
   content: string;
   created_at: string;
+  read_at: string | null;
 };
 
 export default function MessagesScreen() {
+  useSettings();
   const { session } = useAuth();
+  const responsive = useResponsive();
   const userId = session?.user.id;
   const params = useLocalSearchParams<{ c?: string }>();
   const [active, setActive] = useState<string | null>(null);
   const [convs, setConvs] = useState<Conversation[]>([]);
   const [names, setNames] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messageData, setMessageData] = useState<{ conversationId: string; items: Message[] } | null>(null);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const listRef = useRef<FlatList<Message>>(null);
+  const [presence, setPresence] = useState<{ conversationId: string; online: boolean } | null>(null);
+  const messages = messageData?.conversationId === active ? messageData.items : [];
+  const otherOnline = presence?.conversationId === active && presence.online;
 
   useEffect(() => {
+    const sub = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow', () => {
+      setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 50);
+    });
+    return () => sub.remove();
+  }, []);
+
+  useEffect(() => {
+    if (!active || !userId) return;
+    const ch = supabase.channel(`presence-${active}`, { config: { presence: { key: userId } } });
+    ch.on('presence', { event: 'sync' }, () => {
+      setPresence({
+        conversationId: active,
+        online: Object.keys(ch.presenceState()).some((k) => k !== userId),
+      });
+    }).subscribe((status) => {
+      if (status === 'SUBSCRIBED') void ch.track({ at: Date.now() });
+    });
+    return () => {
+      void supabase.removeChannel(ch);
+    };
+  }, [active, userId]);
+
+  useEffect(() => {
+    // Keep an already-open screen in sync when navigation supplies a new conversation.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (params.c) setActive(params.c);
   }, [params.c]);
 
@@ -75,6 +110,8 @@ export default function MessagesScreen() {
   }, [userId]);
 
   useEffect(() => {
+    // Conversation data is fetched asynchronously; the callback updates state on completion.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadConvs();
     if (!userId) return;
     const ch = supabase
@@ -89,24 +126,30 @@ export default function MessagesScreen() {
   const loadMessages = useCallback(async (id: string) => {
     const { data, error: err } = await supabase
       .from('chat_messages')
-      .select('id, conversation_id, sender_id, sender_is_admin, content, created_at')
+      .select('id, conversation_id, sender_id, sender_is_admin, content, created_at, read_at')
       .eq('conversation_id', id)
       .order('created_at', { ascending: true })
       .limit(500);
     if (err) setError(errorMessage(err));
-    setMessages((data ?? []) as Message[]);
+    setMessageData({ conversationId: id, items: (data ?? []) as Message[] });
     void supabase.rpc('mark_chat_read', { p_conversation_id: id });
   }, []);
 
   useEffect(() => {
     if (!active) return;
-    setMessages([]);
+    // The displayed list is keyed by conversationId, so old messages disappear immediately.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadMessages(active);
     const ch = supabase
       .channel(`chat-msgs-${active}`)
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'chat_messages', filter: `conversation_id=eq.${active}` },
+        () => loadMessages(active),
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'chat_messages', filter: `conversation_id=eq.${active}` },
         () => loadMessages(active),
       )
       .subscribe();
@@ -142,18 +185,19 @@ export default function MessagesScreen() {
     const conv = convs.find((c) => c.id === active);
     return (
       <SafeAreaView style={styles.safe}>
-        <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={0}>
           <View style={styles.topBar}>
             <TouchableOpacity onPress={() => setActive(null)} hitSlop={10}>
               <Ionicons name="chevron-back" size={26} color="#007AFF" />
             </TouchableOpacity>
             <Text style={styles.topTitle}>{conv ? titleOf(conv) : 'Discussion'}</Text>
+            <Text style={{ color: otherOnline ? '#34C759' : '#999', fontSize: 12 }}>{otherOnline ? '● En ligne' : '○ Hors ligne'}</Text>
           </View>
           <FlatList
             ref={listRef}
             data={messages}
             keyExtractor={(m) => m.id}
-            contentContainerStyle={styles.msgList}
+            contentContainerStyle={[styles.msgList, responsive.contentFrame]}
             onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
             ListEmptyComponent={<Text style={styles.empty}>Aucun message. Écrivez le premier !</Text>}
             renderItem={({ item }) => {
@@ -163,7 +207,8 @@ export default function MessagesScreen() {
                   {!mine && item.sender_is_admin && <Text style={styles.sender}>{SUPPORT_NAME}</Text>}
                   <Text style={mine ? styles.mineText : styles.theirText}>{item.content}</Text>
                   <Text style={[styles.time, mine && styles.timeMine]}>
-                    {new Date(item.created_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                    {new Date(item.created_at).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                    {mine ? (item.read_at ? '  ✓✓ Lu' : '  ✓ Envoyé') : ''}
                   </Text>
                 </View>
               );
@@ -172,6 +217,7 @@ export default function MessagesScreen() {
           {!!error && <Text style={styles.error}>{error}</Text>}
           <View style={styles.composer}>
             <TextInput
+              {...INPUT_PROPS}
               style={styles.input}
               placeholder="Votre message"
               placeholderTextColor="#999"
@@ -200,7 +246,7 @@ export default function MessagesScreen() {
         <FlatList
           data={convs}
           keyExtractor={(c) => c.id}
-          contentContainerStyle={styles.convList}
+          contentContainerStyle={[styles.convList, { paddingHorizontal: responsive.gutter }, responsive.contentFrame]}
           ListHeaderComponent={
             !hasSupport ? (
               <TouchableOpacity style={styles.convRow} onPress={openSupport}>
@@ -235,7 +281,7 @@ export default function MessagesScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedStyles({
   flex: { flex: 1 },
   safe: { flex: 1, backgroundColor: '#f5f5f5' },
   heading: { fontSize: 24, fontWeight: 'bold', color: '#222', padding: 16 },
