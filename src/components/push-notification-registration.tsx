@@ -4,7 +4,7 @@ import * as Notifications from 'expo-notifications';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase-client';
-import { registerPushToken } from '@/lib/push-notifications';
+import { hasRegisteredPushToken, registerPushToken } from '@/lib/push-notifications';
 
 export function PushNotificationRegistration() {
   const { session } = useAuth();
@@ -14,13 +14,22 @@ export function PushNotificationRegistration() {
 
   useEffect(() => {
     if (!userId || Platform.OS === 'web') return;
-    void registerPushToken(userId).then((permission) => {
-      if (!permission.granted) {
-        console.info('[push] Les notifications système ne sont pas autorisées sur cet appareil.');
-      }
-    }).catch((error: unknown) => {
-      console.error('[push] Enregistrement du téléphone impossible:', error);
-    });
+    let active = true;
+    void hasRegisteredPushToken(userId)
+      .then((registered) => {
+        if (!active || !registered) return;
+        return registerPushToken(userId).then((permission) => {
+          if (!permission.granted) {
+            console.info('[push] Les notifications système ne sont pas autorisées sur cet appareil.');
+          }
+        });
+      })
+      .catch((error: unknown) => {
+        console.error('[push] Enregistrement du téléphone impossible:', error);
+      });
+    return () => {
+      active = false;
+    };
   }, [userId]);
 
   useEffect(() => {

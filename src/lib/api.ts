@@ -2,7 +2,7 @@ import * as SecureStore from 'expo-secure-store';
 
 const API_URL =
   process.env.EXPO_PUBLIC_API_URL ||
-  (__DEV__ ? 'http://localhost:3000/api/v1' : 'https://api.artisants.com/api/v1');
+  (__DEV__ ? 'http://localhost:3000/api/v1' : 'https://artisant-backend.onrender.com/api/v1');
 const AUTH_TOKEN_KEY = 'auth_token';
 
 export const setAuthToken = async (token: string | null) => {

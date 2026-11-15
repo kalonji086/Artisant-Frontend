@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
+  AppState,
   ActivityIndicator,
   Alert,
   Linking,
@@ -21,7 +22,7 @@ import { useAuth } from '@/lib/auth-context';
 import { AccentColors } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { useTranslate, useUserPreferences, type AccentColor, type ThemeMode, type AppLanguage } from '@/lib/user-preferences-context';
-import { registerPushToken } from '@/lib/push-notifications';
+import { hasRegisteredPushToken, registerPushToken, unregisterPushToken } from '@/lib/push-notifications';
 import * as Notifications from 'expo-notifications';
 
 type ProfileDraft = {
@@ -170,7 +171,10 @@ export default function SettingsScreen() {
         <TouchableOpacity onPress={() => router.back()} accessibilityLabel="Retour">
           <Ionicons name="arrow-back" size={23} color={theme.text} />
         </TouchableOpacity>
-        <Text style={[styles.title, { color: theme.text }]}>{t('Paramètres')}</Text>
+        <View>
+          <Text style={[styles.title, { color: theme.text }]}>{t('Paramètres')}</Text>
+          <Text style={[styles.headerSubtitle, { color: theme.textSecondary }]}>{t('Personnalisez votre expérience')}</Text>
+        </View>
       </View>
 
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
@@ -179,7 +183,7 @@ export default function SettingsScreen() {
             {t('Préférences indisponibles')}: {preferencesError}
           </Text>
         ) : null}
-        <View style={[styles.identity, { backgroundColor: theme.backgroundElement }]}>
+        <View style={[styles.identity, { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected }]}>
           <View style={[styles.avatar, { backgroundColor: theme.accent }]}>
             <Text style={styles.avatarText}>
               {(profile?.full_name?.trim().charAt(0) || 'A').toUpperCase()}
@@ -193,7 +197,7 @@ export default function SettingsScreen() {
         </View>
 
         <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
-          <Text style={[styles.sectionTitle, { color: theme.text }]}>{t('Informations du profil')}</Text>
+          <SectionHeading theme={theme} icon="person-circle-outline" title={t('Informations du profil')} />
           <Field theme={theme} t={t} label="Nom complet" value={draft.full_name} onChangeText={(value) => updateDraft('full_name', value)} />
           <Field theme={theme} t={t} label="Téléphone" value={draft.phone} onChangeText={(value) => updateDraft('phone', value)} keyboardType="phone-pad" />
           <Field theme={theme} t={t} label="Ville" value={draft.city} onChangeText={(value) => updateDraft('city', value)} />
@@ -219,7 +223,7 @@ export default function SettingsScreen() {
           <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
             <View style={styles.availabilityRow}>
               <View style={styles.flex}>
-                <Text style={[styles.sectionTitle, { color: theme.text }]}>{t('Disponibilité')}</Text>
+                <SectionHeading theme={theme} icon="briefcase-outline" title={t('Disponibilité')} />
                 <Text style={[styles.muted, { color: theme.textSecondary }]}>
                   {profile?.is_available ? t('Votre profil apparaît dans la recherche.') : t('Votre profil est masqué de la recherche.')}
                 </Text>
@@ -235,39 +239,7 @@ export default function SettingsScreen() {
         )}
 
         <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
-          <Text style={[styles.sectionTitle, { color: theme.text }]}>{t('Informations légales')}</Text>
-          <TouchableOpacity style={styles.linkRow} onPress={() => router.push('/(auth)/legal/privacy')}>
-            <Text style={[styles.linkText, { color: theme.accent }]}>{t('Politique de confidentialité')}</Text>
-            <Ionicons name="chevron-forward" size={18} color={theme.accent} />
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.linkRow} onPress={() => router.push('/(auth)/legal/terms')}>
-            <Text style={[styles.linkText, { color: theme.accent }]}>{t('Conditions d’utilisation')}</Text>
-            <Ionicons name="chevron-forward" size={18} color={theme.accent} />
-          </TouchableOpacity>
-        </View>
-
-        <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
-          <Text style={[styles.sectionTitle, { color: theme.text }]}>{t('Notifications en temps réel')}</Text>
-          <PreferenceSwitch
-            title={t('Être averti des nouveaux messages')}
-            value={preferences.notify_messages}
-            disabled={preferencesBusy || preferencesLoading}
-            accent={theme.accent}
-            onChange={(notify_messages) => void savePreference({ notify_messages })}
-          />
-          <PreferenceSwitch
-            title={t('Être averti de mes demandes de devis')}
-            value={preferences.notify_quotes}
-            disabled={preferencesBusy || preferencesLoading}
-            accent={theme.accent}
-            onChange={(notify_quotes) => void savePreference({ notify_quotes })}
-          />
-          <PushPermissionRow userId={userId} theme={theme} t={t} />
-          {preferencesLoading ? <ActivityIndicator color={theme.accent} /> : null}
-        </View>
-
-        <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
-          <Text style={[styles.sectionTitle, { color: theme.text }]}>{t('Apparence')}</Text>
+          <SectionHeading theme={theme} icon="color-palette-outline" title={t('Apparence')} />
           <OptionSelector
             title={t('Thème')}
             value={preferences.theme_mode}
@@ -307,7 +279,39 @@ export default function SettingsScreen() {
         </View>
 
         <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
-          <Text style={[styles.sectionTitle, { color: theme.text }]}>{t('Zone de confidentialité')}</Text>
+          <SectionHeading theme={theme} icon="notifications-outline" title={t('Notifications en temps réel')} />
+          <PreferenceSwitch
+            title={t('Être averti des nouveaux messages')}
+            value={preferences.notify_messages}
+            disabled={preferencesBusy || preferencesLoading}
+            accent={theme.accent}
+            onChange={(notify_messages) => void savePreference({ notify_messages })}
+          />
+          <PreferenceSwitch
+            title={t('Être averti de mes demandes de devis')}
+            value={preferences.notify_quotes}
+            disabled={preferencesBusy || preferencesLoading}
+            accent={theme.accent}
+            onChange={(notify_quotes) => void savePreference({ notify_quotes })}
+          />
+          <PushPermissionRow userId={userId} theme={theme} t={t} />
+          {preferencesLoading ? <ActivityIndicator color={theme.accent} /> : null}
+        </View>
+
+        <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
+          <SectionHeading theme={theme} icon="document-text-outline" title={t('Informations légales')} />
+          <TouchableOpacity style={styles.linkRow} onPress={() => router.push('/(auth)/legal/privacy')}>
+            <Text style={[styles.linkText, { color: theme.accent }]}>{t('Politique de confidentialité')}</Text>
+            <Ionicons name="chevron-forward" size={18} color={theme.accent} />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.linkRow} onPress={() => router.push('/(auth)/legal/terms')}>
+            <Text style={[styles.linkText, { color: theme.accent }]}>{t('Conditions d’utilisation')}</Text>
+            <Ionicons name="chevron-forward" size={18} color={theme.accent} />
+          </TouchableOpacity>
+        </View>
+
+        <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
+          <SectionHeading theme={theme} icon="shield-checkmark-outline" title={t('Zone de confidentialité')} />
           <Text style={[styles.muted, { color: theme.textSecondary }]}>
             {t('Vous pouvez transmettre une demande de suppression de votre compte à notre équipe.')}
           </Text>
@@ -339,33 +343,59 @@ function PushPermissionRow({
   theme: ReturnType<typeof useTheme>;
   t: (text: string) => string;
 }) {
-  const [granted, setGranted] = useState(false);
+  const [pushState, setPushState] = useState<{ userId: string; enabled: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
+  const enabled = pushState !== null && pushState.userId === userId && pushState.enabled;
 
   useEffect(() => {
     if (Platform.OS === 'web') return;
+    if (!userId) return;
     let active = true;
-    void Notifications.getPermissionsAsync()
-      .then((permission) => {
-        if (active) setGranted(permission.granted);
-      })
-      .catch((error: unknown) => {
-        console.warn('[push] Lecture des autorisations impossible:', error);
-      });
+    const refresh = async () => {
+      try {
+        const [permission, registered] = await Promise.all([
+          Notifications.getPermissionsAsync(),
+          hasRegisteredPushToken(userId),
+        ]);
+        if (active) setPushState({ userId, enabled: permission.granted && registered });
+      } catch (error) {
+        console.warn('[push] Lecture de l’état des notifications impossible:', error);
+      }
+    };
+    void refresh();
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void refresh();
+    });
     return () => {
       active = false;
+      subscription.remove();
     };
-  }, []);
+  }, [userId]);
 
   if (Platform.OS === 'web') return null;
 
-  const enable = async () => {
+  const toggle = async (value: boolean) => {
     if (!userId || busy) return;
     setBusy(true);
     try {
-      const permission = await registerPushToken(userId);
-      setGranted(permission.granted);
-      if (!permission.granted && !permission.canAskAgain) await Linking.openSettings();
+      if (value) {
+        const permission = await registerPushToken(userId);
+        if (!permission.granted) {
+          setPushState({ userId, enabled: false });
+          if (!permission.canAskAgain) {
+            await Linking.openSettings();
+          } else {
+            Alert.alert(
+              t('Autorisation refusée'),
+              t('Autorisez les notifications système pour les activer.')
+            );
+          }
+          return;
+        }
+      } else {
+        await unregisterPushToken(userId);
+      }
+      setPushState({ userId, enabled: value });
     } catch (error) {
       Alert.alert(
         t('Notifications push indisponibles'),
@@ -381,21 +411,38 @@ function PushPermissionRow({
       <View style={styles.flex}>
         <Text style={[styles.preferenceLabel, { color: theme.text }]}>{t('Notifications système')}</Text>
         <Text style={[styles.muted, { color: theme.textSecondary }]}>
-          {t(granted ? 'Activées sur cet appareil' : 'Désactivées sur cet appareil')}
+          {t(enabled ? 'Activées sur cet appareil' : 'Désactivées sur cet appareil')}
         </Text>
       </View>
-      <TouchableOpacity
-        style={[styles.pushButton, { borderColor: theme.accent }]}
-        onPress={() => void enable()}
-        disabled={busy || granted || !userId}>
-        {busy ? (
-          <ActivityIndicator color={theme.accent} />
-        ) : (
-          <Text style={[styles.pushButtonText, { color: theme.accent }]}>
-            {t(granted ? 'Activées' : 'Autoriser')}
-          </Text>
-        )}
-      </TouchableOpacity>
+      {busy ? (
+        <ActivityIndicator color={theme.accent} />
+      ) : (
+        <Switch
+          value={enabled}
+          onValueChange={(value) => void toggle(value)}
+          disabled={!userId}
+          trackColor={{ true: theme.accent }}
+        />
+      )}
+    </View>
+  );
+}
+
+function SectionHeading({
+  icon,
+  title,
+  theme,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  title: string;
+  theme: ReturnType<typeof useTheme>;
+}) {
+  return (
+    <View style={styles.sectionHeading}>
+      <View style={[styles.sectionIcon, { backgroundColor: `${theme.accent}18` }]}>
+        <Ionicons name={icon} size={18} color={theme.accent} />
+      </View>
+      <Text style={[styles.sectionTitle, { color: theme.text }]}>{title}</Text>
     </View>
   );
 }
@@ -500,30 +547,31 @@ function OptionSelector({
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#f3f5f8' },
   flex: { flex: 1 },
-  header: { flexDirection: 'row', alignItems: 'center', gap: 16, paddingHorizontal: 20, paddingVertical: 14, backgroundColor: '#fff' },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 16, paddingHorizontal: 20, paddingVertical: 12, borderBottomWidth: 1, backgroundColor: '#fff' },
   title: { color: '#101828', fontSize: 20, fontWeight: '800' },
+  headerSubtitle: { fontSize: 12, marginTop: 2 },
   content: { padding: 16, gap: 14, paddingBottom: 36 },
-  identity: { flexDirection: 'row', alignItems: 'center', gap: 14, padding: 16, backgroundColor: '#fff', borderRadius: 16 },
+  identity: { flexDirection: 'row', alignItems: 'center', gap: 14, padding: 17, backgroundColor: '#fff', borderRadius: 18, borderWidth: 1 },
   avatar: { width: 54, height: 54, borderRadius: 27, alignItems: 'center', justifyContent: 'center', backgroundColor: '#1877F2' },
   avatarText: { color: '#fff', fontSize: 22, fontWeight: '800' },
   name: { color: '#101828', fontSize: 16, fontWeight: '800' },
   muted: { color: '#667085', fontSize: 13, marginTop: 3 },
   role: { color: '#1877F2', fontSize: 12, fontWeight: '700', marginTop: 5 },
-  card: { padding: 16, gap: 14, borderRadius: 16, backgroundColor: '#fff' },
+  card: { padding: 16, gap: 14, borderRadius: 18, backgroundColor: '#fff', borderWidth: 1, borderColor: '#eaecf0' },
+  sectionHeading: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 2 },
+  sectionIcon: { width: 34, height: 34, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
   sectionTitle: { color: '#101828', fontSize: 15, fontWeight: '800' },
   field: { gap: 6 },
   label: { color: '#475467', fontSize: 13, fontWeight: '600' },
-  input: { minHeight: 46, paddingHorizontal: 12, borderWidth: 1, borderColor: '#d0d5dd', borderRadius: 10, color: '#101828', fontSize: 15, backgroundColor: '#fff' },
+  input: { minHeight: 46, paddingHorizontal: 12, borderWidth: 1, borderColor: '#d0d5dd', borderRadius: 12, color: '#101828', fontSize: 15, backgroundColor: '#fff' },
   multiline: { minHeight: 100, paddingTop: 12, textAlignVertical: 'top' },
-  primaryButton: { minHeight: 46, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: '#1877F2' },
+  primaryButton: { minHeight: 46, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: '#1877F2' },
   primaryButtonText: { color: '#fff', fontWeight: '700', fontSize: 15 },
   availabilityRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   linkRow: { minHeight: 42, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderTopWidth: 1, borderTopColor: '#eaecf0' },
   linkText: { color: '#1877F2', fontWeight: '600', fontSize: 14 },
   preferencesError: { color: '#b42318', backgroundColor: '#fef3f2', padding: 12, borderRadius: 10, fontSize: 13 },
   preferenceRow: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
-  pushButton: { minHeight: 36, justifyContent: 'center', borderWidth: 1, borderRadius: 18, paddingHorizontal: 12 },
-  pushButtonText: { fontSize: 13, fontWeight: '700' },
   preferenceLabel: { flex: 1, fontSize: 14, fontWeight: '600' },
   optionGroup: { gap: 8 },
   optionList: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },

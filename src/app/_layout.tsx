@@ -11,6 +11,7 @@ import { SplashLoader } from '@/components/splash-loader';
 import AppTabs from '@/components/app-tabs';
 import { LocationTracker } from '@/components/location-tracker';
 import { PushNotificationRegistration } from '@/components/push-notification-registration';
+import { UnreadNotificationCountProvider } from '@/hooks/use-unread-notification-count';
 
 void SplashScreen.preventAutoHideAsync().catch((error: unknown) => {
   console.warn('[splash] Impossible de retarder l’écran natif:', error);
@@ -60,7 +61,9 @@ export default function TabLayout() {
         <AuthGuard />
         <LocationTracker />
         <PushNotificationRegistration />
-        <AppTabs />
+        <UnreadNotificationCountProvider>
+          <AppTabs />
+        </UnreadNotificationCountProvider>
       </UserPreferencesProvider>
     </AuthProvider>
   );

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -7,6 +7,7 @@ import {
   Alert,
   ActivityIndicator,
   KeyboardAvoidingView,
+  Image,
   ImageBackground,
   ScrollView,
   StyleSheet,
@@ -14,12 +15,15 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import { supabase } from '@/lib/supabase-client';
+import { savePendingArtisanAvatar, uploadArtisanAvatar, type ArtisanPhoto } from '@/lib/artisan-avatar';
 import { getCurrentCoords, saveMyLocation } from '@/lib/location';
 import { PROFESSIONS } from '@/lib/professions';
 import { AppLogo } from '@/components/app-logo';
 import { TERMS_VERSION } from '@/lib/legal-links';
+import { useAuth } from '@/lib/auth-context';
 
 type Mode = 'login' | 'signup';
 type Role = 'client' | 'artisan';
@@ -50,15 +54,21 @@ const ageFrom = (iso: string): number => {
   return age;
 };
 
-export default function AuthScreen() {
+export default function LoginScreen() {
+  return <AuthScreen initialMode="login" />;
+}
+
+export function AuthScreen({ initialMode }: { initialMode: Mode }) {
   const router = useRouter();
-  const [mode, setMode] = useState<Mode>('login');
+  const { session } = useAuth();
+  const isSignup = initialMode === 'signup';
   const [role, setRole] = useState<Role>('client');
   const [step, setStep] = useState(0);
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [accepted, setAccepted] = useState(false);
+  const hadSession = useRef(Boolean(session));
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -70,10 +80,22 @@ export default function AuthScreen() {
   const [address, setAddress] = useState('');
   const [city, setCity] = useState('');
   const [country, setCountry] = useState('');
-  const [profession, setProfession] = useState(PROFESSIONS[0]);
+  const [profession, setProfession] = useState('');
   const [yearsExperience, setYearsExperience] = useState('');
   const [radiusKm, setRadiusKm] = useState('');
   const [description, setDescription] = useState('');
+  const [avatar, setAvatar] = useState<ArtisanPhoto | null>(null);
+
+  useEffect(() => {
+    if (session) {
+      hadSession.current = true;
+    } else if (hadSession.current) {
+      setEmail('');
+      setPassword('');
+      setConfirmPassword('');
+      hadSession.current = false;
+    }
+  }, [session]);
 
   const handleLogin = async () => {
     if (!email.trim() || !password) {
@@ -95,6 +117,33 @@ export default function AuthScreen() {
   const isArtisan = role === 'artisan';
   const lastStep = ARTISAN_STEPS.length - 1;
 
+  const chooseAvatar = async () => {
+    try {
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert('Accès aux photos refusé', 'Autorisez l’accès aux photos pour choisir une image de profil.');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+      if (result.canceled) return;
+
+      const photo = result.assets[0];
+      if (photo.fileSize && photo.fileSize > 5 * 1024 * 1024) {
+        Alert.alert('Photo trop volumineuse', 'Choisissez une image de moins de 5 Mo.');
+        return;
+      }
+      setAvatar({ uri: photo.uri, mimeType: photo.mimeType, fileName: photo.fileName });
+    } catch (err) {
+      Alert.alert('Sélection impossible', err instanceof Error ? err.message : 'Impossible d’ouvrir les photos.');
+    }
+  };
+
   /** Retourne un message d'erreur si l'étape (ou le formulaire client) est incomplète. */
   const validate = (target: number): string | null => {
     if (!isArtisan || target === 0) {
@@ -112,8 +161,10 @@ export default function AuthScreen() {
       if (!address.trim()) return "L'adresse est requise";
       if (!city.trim()) return 'La ville est requise';
       if (!country.trim()) return 'Le pays est requis';
+      if (!avatar) return 'Veuillez choisir une photo de profil';
     }
     if (isArtisan && target === 2) {
+      if (!profession) return 'Veuillez choisir votre métier';
       const years = Number(yearsExperience);
       if (yearsExperience.trim() === '' || !Number.isInteger(years) || years < 0 || years > 70) {
         return "Années d'expérience invalides (0 à 70)";
@@ -185,13 +236,37 @@ export default function AuthScreen() {
       });
       if (error) throw error;
 
+      let avatarIssue: string | null = null;
+      if (isArtisan && avatar && data.user) {
+        try {
+          if (data.session) {
+            try {
+              await uploadArtisanAvatar(data.user.id, avatar);
+            } catch (uploadError) {
+              console.warn('[auth] Envoi immédiat de la photo impossible:', uploadError);
+              await savePendingArtisanAvatar(data.user.id, avatar);
+              avatarIssue = 'La photo est mise en attente et sera retentée à votre prochaine connexion.';
+            }
+          } else {
+            await savePendingArtisanAvatar(data.user.id, avatar);
+          }
+        } catch (photoError) {
+          console.error('[auth] Enregistrement de la photo de profil impossible:', photoError);
+          avatarIssue = photoError instanceof Error ? photoError.message : 'La photo n’a pas pu être enregistrée.';
+        }
+      }
+
       if (!data.session) {
         Alert.alert(
           'Compte créé',
-          'Vérifiez votre email pour confirmer votre compte, puis connectez-vous.',
-          [{ text: 'OK', onPress: () => setMode('login') }]
+          `Vérifiez votre email pour confirmer votre compte, puis connectez-vous.${avatarIssue ? `\n\nPhoto : ${avatarIssue}` : ''}`,
+          [{ text: 'OK', onPress: () => router.replace('/(auth)/login') }]
         );
         return;
+      }
+
+      if (avatarIssue) {
+        Alert.alert('Photo non envoyée', avatarIssue);
       }
 
       // Position GPS du téléphone : sert à trouver les artisans proches (client)
@@ -209,7 +284,6 @@ export default function AuthScreen() {
     }
   };
 
-  const isSignup = mode === 'signup';
   const wizard = isSignup && isArtisan;
   const showAccount = !wizard || step === 0;
   const showIdentity = wizard && step === 1;
@@ -217,12 +291,6 @@ export default function AuthScreen() {
   const showSummary = wizard && step === lastStep;
   const showSubmit = isSignup && (!wizard || step === lastStep);
   const submitBlocked = loading || (showSubmit && !accepted);
-
-  const switchMode = (m: Mode) => {
-    setMode(m);
-    setStep(0);
-    setAccepted(false);
-  };
 
   return (
     <ImageBackground
@@ -240,15 +308,6 @@ export default function AuthScreen() {
           </View>
 
           <View style={styles.card}>
-          <Segmented
-            options={[
-              { value: 'login', label: 'Connexion' },
-              { value: 'signup', label: 'Créer un compte' },
-            ]}
-            value={mode}
-            onChange={(v) => switchMode(v as Mode)}
-          />
-
           {isSignup && step === 0 && (
             <>
               <Text style={styles.sectionLabel}>Je suis</Text>
@@ -347,6 +406,22 @@ export default function AuthScreen() {
               <Field placeholder="Adresse (rue, quartier)" value={address} onChangeText={setAddress} />
               <Field placeholder="Ville" value={city} onChangeText={setCity} />
               <Field placeholder="Pays" value={country} onChangeText={setCountry} />
+              <View style={styles.photoRow}>
+                {avatar ? (
+                  <Image source={{ uri: avatar.uri }} style={styles.photoPreview} accessibilityLabel="Aperçu de la photo de profil" />
+                ) : (
+                  <View style={styles.photoPlaceholder}>
+                    <Ionicons name="person-outline" size={22} color="#667085" />
+                  </View>
+                )}
+                <View style={styles.flex}>
+                  <Text style={styles.photoTitle}>Photo de profil</Text>
+                  <Text style={styles.photoHint}>Obligatoire — visible aux clients sur la carte</Text>
+                </View>
+                <TouchableOpacity style={styles.photoButton} onPress={chooseAvatar} accessibilityRole="button">
+                  <Text style={styles.photoButtonText}>{avatar ? 'Changer' : 'Choisir'}</Text>
+                </TouchableOpacity>
+              </View>
             </>
           )}
 
@@ -396,7 +471,9 @@ export default function AuthScreen() {
                   ['Email', email],
                   ['Téléphone', phone],
                   ['Naissance', birthDate],
+                  ['Genre', GENDERS.find((item) => item.value === gender)?.label ?? gender],
                   ['Adresse', `${address}, ${city}, ${country}`],
+                  ['Photo de profil', avatar ? 'Ajoutée' : 'Manquante'],
                   ['Métier', profession],
                   ['Expérience', `${yearsExperience} an(s)`],
                   ['Rayon', `${radiusKm} km`],
@@ -450,6 +527,15 @@ export default function AuthScreen() {
               )}
             </TouchableOpacity>
           </View>
+
+          <TouchableOpacity
+            style={styles.accountButton}
+            onPress={() => router.replace(isSignup ? '/(auth)/login' : '/(auth)/signup')}
+            disabled={loading}>
+            <Text style={styles.accountButtonText}>
+              {isSignup ? 'Déjà un compte ? Se connecter' : 'Créer un compte'}
+            </Text>
+          </TouchableOpacity>
 
           <View style={styles.footer}>
             <Text style={styles.footerLink} onPress={() => router.push('/(auth)/legal/privacy')}>Politique de confidentialité</Text>
@@ -514,6 +600,13 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#101828',
   },
+  photoRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 4 },
+  photoPreview: { width: 52, height: 52, borderRadius: 26, backgroundColor: '#eaf2ff' },
+  photoPlaceholder: { width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f2f4f7' },
+  photoTitle: { color: '#344054', fontSize: 13, fontWeight: '700' },
+  photoHint: { color: '#667085', fontSize: 11, marginTop: 2 },
+  photoButton: { borderWidth: 1, borderColor: '#1877F2', borderRadius: 9, paddingHorizontal: 11, paddingVertical: 8 },
+  photoButtonText: { color: '#1877F2', fontSize: 12, fontWeight: '700' },
   multiline: { minHeight: 80, textAlignVertical: 'top' },
   eye: { position: 'absolute', right: 13, top: 13 },
   segmented: { flexDirection: 'row', backgroundColor: '#f2f4f7', borderRadius: 10, padding: 3 },
@@ -548,6 +641,8 @@ const styles = StyleSheet.create({
   submit: { backgroundColor: '#1877F2', borderRadius: 10, paddingVertical: 14, alignItems: 'center' },
   submitDisabled: { opacity: 0.6 },
   submitText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  accountButton: { minHeight: 46, borderWidth: 1, borderColor: '#1877F2', borderRadius: 10, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 },
+  accountButtonText: { color: '#1877F2', fontSize: 15, fontWeight: '700', textAlign: 'center' },
   footer: { flexDirection: 'row', justifyContent: 'center', flexWrap: 'wrap', gap: 8, marginTop: 10 },
   footerLink: { fontSize: 12, color: '#475467', textDecorationLine: 'underline' },
   footerSep: { fontSize: 12, color: '#98a2b3' },

@@ -70,9 +70,17 @@ export default function ProfileScreen() {
           </TouchableOpacity>
         )}
 
-        <TouchableOpacity style={[styles.secondaryButton, { backgroundColor: theme.backgroundElement }]} onPress={() => router.push('/settings')}>
-          <Ionicons name="settings-outline" size={19} color={theme.accent} />
-          <Text style={[styles.secondaryButtonText, { color: theme.text }]}>{t('Paramètres du compte')}</Text>
+        <TouchableOpacity
+          style={[styles.settingsButton, { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected }]}
+          onPress={() => router.push('/settings')}
+          accessibilityRole="button">
+          <View style={[styles.settingsIcon, { backgroundColor: `${theme.accent}18` }]}>
+            <Ionicons name="settings-outline" size={20} color={theme.accent} />
+          </View>
+          <View style={styles.settingsText}>
+            <Text style={[styles.secondaryButtonText, { color: theme.text }]}>{t('Paramètres du compte')}</Text>
+            <Text style={[styles.settingsSubtitle, { color: theme.textSecondary }]}>{t('Gérez votre profil, votre apparence et vos notifications')}</Text>
+          </View>
           <Ionicons name="chevron-forward" size={18} color={theme.textSecondary} />
         </TouchableOpacity>
 
@@ -109,7 +117,7 @@ function ProfileLine({
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#f3f5f8' },
-  content: { flexGrow: 1, padding: 18, gap: 12, justifyContent: 'center' },
+  content: { flexGrow: 1, padding: 18, gap: 12, justifyContent: 'flex-start' },
   card: { alignItems: 'center', backgroundColor: '#fff', borderRadius: 18, padding: 22, gap: 6 },
   avatar: { width: 76, height: 76, borderRadius: 38, alignItems: 'center', justifyContent: 'center', backgroundColor: '#1877F2', marginBottom: 8 },
   avatarText: { color: '#fff', fontSize: 30, fontWeight: '800' },
@@ -122,6 +130,10 @@ const styles = StyleSheet.create({
   detailValue: { flex: 1, color: '#344054', fontSize: 14, fontWeight: '600' },
   secondaryButton: { minHeight: 52, flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, borderRadius: 13, backgroundColor: '#fff' },
   secondaryButtonText: { flex: 1, color: '#344054', fontSize: 14, fontWeight: '700' },
+  settingsButton: { minHeight: 74, flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, borderRadius: 15, borderWidth: 1 },
+  settingsIcon: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  settingsText: { flex: 1, gap: 4 },
+  settingsSubtitle: { fontSize: 12, lineHeight: 16 },
   signOutButton: { minHeight: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9, paddingHorizontal: 16, borderRadius: 13, borderWidth: 1, borderColor: '#fecdca', backgroundColor: '#fff' },
   signOutText: { color: '#d92d20', fontSize: 14, fontWeight: '700' },
 });

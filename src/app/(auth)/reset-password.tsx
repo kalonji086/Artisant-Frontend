@@ -12,8 +12,10 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import * as Linking from 'expo-linking';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase-client';
+import { clearRememberedCredentials } from '@/lib/remembered-credentials';
 
 export default function ResetPasswordScreen() {
   const router = useRouter();
@@ -21,10 +23,16 @@ export default function ResetPasswordScreen() {
     code?: string | string[];
     token_hash?: string | string[];
     type?: string | string[];
+    access_token?: string | string[];
+    refresh_token?: string | string[];
   }>();
   const code = first(params.code);
   const tokenHash = first(params.token_hash);
   const type = first(params.type);
+  const accessToken = first(params.access_token);
+  const refreshToken = first(params.refresh_token);
+  const [initialUrl, setInitialUrl] = useState<string | null | undefined>(undefined);
+  const [incomingUrl, setIncomingUrl] = useState<string | null>(null);
   const [checking, setChecking] = useState(true);
   const [ready, setReady] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -35,14 +43,55 @@ export default function ResetPasswordScreen() {
 
   useEffect(() => {
     let active = true;
-    const recoveryLink = code ?? tokenHash ?? 'existing-session';
+    const subscription = Linking.addEventListener('url', ({ url }) => setIncomingUrl(url));
+    Linking.getInitialURL()
+      .then((url) => {
+        if (active) setInitialUrl(url);
+      })
+      .catch((error: unknown) => {
+        console.warn('[auth] Lien de réinitialisation inaccessible:', error);
+        if (active) setInitialUrl(null);
+      });
+
+    return () => {
+      active = false;
+      subscription.remove();
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    if (initialUrl === undefined) return;
+
+    const linkParams = paramsFromUrl(incomingUrl ?? initialUrl);
+    const recoveryCode = code ?? linkParams.code;
+    const recoveryTokenHash = tokenHash ?? linkParams.token_hash;
+    const recoveryType = type ?? linkParams.type;
+    const recoveryAccessToken = accessToken ?? linkParams.access_token;
+    const recoveryRefreshToken = refreshToken ?? linkParams.refresh_token;
+    const recoveryLink = [
+      recoveryCode,
+      recoveryTokenHash,
+      recoveryType,
+      recoveryAccessToken,
+      recoveryRefreshToken,
+    ].filter(Boolean).join(':') || 'existing-session';
     if (!recoveryPromise.current || recoveryPromise.current.link !== recoveryLink) {
       const promise = (async () => {
-        if (code) {
-          const { error } = await supabase.auth.exchangeCodeForSession(code);
+        if (recoveryType && recoveryType !== 'recovery') {
+          throw new Error('Ce lien ne permet pas de réinitialiser le mot de passe.');
+        }
+        if (recoveryCode) {
+          const { error } = await supabase.auth.exchangeCodeForSession(recoveryCode);
           if (error) throw error;
-        } else if (tokenHash && type === 'recovery') {
-          const { error } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type: 'recovery' });
+        } else if (recoveryTokenHash && recoveryType === 'recovery') {
+          const { error } = await supabase.auth.verifyOtp({ token_hash: recoveryTokenHash, type: 'recovery' });
+          if (error) throw error;
+        } else if (recoveryAccessToken && recoveryRefreshToken && recoveryType === 'recovery') {
+          const { error } = await supabase.auth.setSession({
+            access_token: recoveryAccessToken,
+            refresh_token: recoveryRefreshToken,
+          });
           if (error) throw error;
         } else {
           const { data, error } = await supabase.auth.getSession();
@@ -55,7 +104,10 @@ export default function ResetPasswordScreen() {
 
     recoveryPromise.current.promise
       .then(() => {
-        if (active) setReady(true);
+        if (active) {
+          setErrorMessage(null);
+          setReady(true);
+        }
       })
       .catch((error: unknown) => {
         if (active) setErrorMessage(error instanceof Error ? error.message : 'Le lien est invalide ou a expiré.');
@@ -67,7 +119,7 @@ export default function ResetPasswordScreen() {
     return () => {
       active = false;
     };
-  }, [code, tokenHash, type]);
+  }, [code, tokenHash, type, accessToken, refreshToken, initialUrl, incomingUrl]);
 
   const savePassword = async () => {
     if (password.length < 6) {
@@ -83,6 +135,11 @@ export default function ResetPasswordScreen() {
     try {
       const { error } = await supabase.auth.updateUser({ password });
       if (error) throw error;
+      try {
+        await clearRememberedCredentials();
+      } catch (storageError) {
+        console.warn('[auth] Suppression des identifiants mémorisés impossible:', storageError);
+      }
       await supabase.auth.signOut();
       Alert.alert('Mot de passe modifié', 'Vous pouvez maintenant vous connecter avec votre nouveau mot de passe.', [
         { text: 'Se connecter', onPress: () => router.replace('/(auth)/login') },
@@ -159,6 +216,20 @@ export default function ResetPasswordScreen() {
 
 function first(value?: string | string[]) {
   return Array.isArray(value) ? value[0] : value;
+}
+
+function paramsFromUrl(url: string | null) {
+  if (!url) return {};
+  const [beforeHash, hash = ''] = url.split('#', 2);
+  const query = beforeHash.includes('?') ? beforeHash.slice(beforeHash.indexOf('?') + 1) : '';
+  const params = new URLSearchParams([query, hash].filter(Boolean).join('&'));
+  return {
+    code: params.get('code') ?? undefined,
+    token_hash: params.get('token_hash') ?? undefined,
+    type: params.get('type') ?? undefined,
+    access_token: params.get('access_token') ?? undefined,
+    refresh_token: params.get('refresh_token') ?? undefined,
+  };
 }
 
 const styles = StyleSheet.create({

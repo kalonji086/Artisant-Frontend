@@ -36,6 +36,12 @@
       "expo-router",
       "expo-notifications",
       [
+        "expo-image-picker",
+        {
+          "photosPermission": "Artisant utilise votre photo de profil pour vous présenter aux clients sur la carte."
+        }
+      ],
+      [
         "expo-build-properties",
         {
           "android": {
@@ -68,8 +74,9 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "09a6e4cb-93cb-4525-b436-708df598e470"
+        "projectId": "819e7143-7302-4981-841c-7b6e6a825d6d"
       }
-    }
+    },
+    "owner": "discutions-team"
   }
 }

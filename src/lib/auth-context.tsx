@@ -1,8 +1,11 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Session } from '@supabase/supabase-js';
+import { Alert } from 'react-native';
 import { supabase } from '@/lib/supabase-client';
 import api from '@/lib/api';
 import { unregisterPushToken } from '@/lib/push-notifications';
+import { uploadPendingArtisanAvatar } from '@/lib/artisan-avatar';
+import { clearRememberedCredentials } from '@/lib/remembered-credentials';
 
 export type Role = 'client' | 'artisan' | 'admin';
 
@@ -38,6 +41,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profileError, setProfileError] = useState<string | null>(null);
   const profileRequestId = useRef(0);
   const profileController = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    void clearRememberedCredentials().catch((error: unknown) => {
+      console.warn('[auth] Suppression des identifiants mémorisés impossible:', error);
+    });
+  }, []);
 
   const loadProfile = useCallback(async (userId: string | null) => {
     const requestId = ++profileRequestId.current;
@@ -141,6 +150,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const userId = session?.user.id;
     if (!userId) return;
+    let active = true;
+    void uploadPendingArtisanAvatar(userId).catch((error: unknown) => {
+      console.error('[auth] Envoi de la photo en attente impossible:', error);
+      if (active) {
+        Alert.alert(
+          'Photo non envoyée',
+          error instanceof Error ? error.message : 'La photo de profil n’a pas pu être envoyée. Réessayez après vérification de votre connexion.'
+        );
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [session?.user.id]);
+
+  useEffect(() => {
+    const userId = session?.user.id;
+    if (!userId) return;
 
     const channel = supabase
       .channel(`profile-live-${userId}`)
@@ -186,7 +213,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             console.warn('[push] Désinscription du téléphone impossible:', error);
           }
         }
-        await supabase.auth.signOut();
+        const { error } = await supabase.auth.signOut();
+        if (error) throw error;
+        try {
+          await clearRememberedCredentials();
+        } catch (storageError) {
+          console.warn('[auth] Suppression des identifiants mémorisés impossible:', storageError);
+        }
         setProfile(null);
       },
     }),

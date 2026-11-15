@@ -48,7 +48,7 @@ export default function NotificationsScreen() {
     setError(null);
     const { data, error: loadError } = await supabase
       .from('app_notifications')
-      .select('id, kind, title, body, data, created_at, read_at')
+      .select('id, title, body, data, created_at, read_at')
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
       .limit(100);
@@ -56,7 +56,14 @@ export default function NotificationsScreen() {
     if (loadError) {
       setError(loadError.message);
     } else {
-      setNotifications((data ?? []) as AppNotification[]);
+      setNotifications((data ?? []).map((row) => {
+        const notificationData = (row.data ?? {}) as Record<string, unknown>;
+        return {
+          ...row,
+          data: notificationData,
+          kind: notificationData.screen === 'messages' ? 'message' : 'quote',
+        };
+      }) as AppNotification[]);
     }
     setLoading(false);
     setRefreshing(false);

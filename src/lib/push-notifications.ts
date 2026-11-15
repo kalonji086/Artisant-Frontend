@@ -7,6 +7,10 @@ import { supabase } from '@/lib/supabase-client';
 
 const tokenStorageKey = (userId: string) => `@artisant/expo-push-token/${userId}`;
 
+export async function hasRegisteredPushToken(userId: string) {
+  return Boolean(await AsyncStorage.getItem(tokenStorageKey(userId)));
+}
+
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowBanner: true,
