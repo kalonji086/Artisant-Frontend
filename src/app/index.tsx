@@ -46,7 +46,7 @@ const RADIUS_METERS = 50_000;
 
 export default function HomeScreen() {
   const router = useRouter();
-  const { profile, session } = useAuth();
+  const { profile, session, loading: authLoading, profileLoading } = useAuth();
   const theme = useTheme();
   const t = useTranslate();
   const unreadCount = useUnreadNotificationCount();
@@ -67,6 +67,16 @@ export default function HomeScreen() {
 
   const load = useCallback(async (quiet = false, coordsOverride?: Coords, persistLocation = true) => {
     const request = ++requestId.current;
+    if (authLoading || profileLoading) return;
+    if (!session?.user.id || profile?.role !== 'client') {
+      setArtisans([]);
+      setSelectedId(null);
+      setMe(null);
+      setError(null);
+      setLoading(false);
+      setRefreshing(false);
+      return;
+    }
     if (!quiet) setLoading(true);
     setError(null);
 
@@ -109,7 +119,7 @@ export default function HomeScreen() {
         setRefreshing(false);
       }
     }
-  }, [filter]);
+  }, [authLoading, profileLoading, session?.user.id, profile?.role, filter]);
 
   useEffect(() => {
     // load() updates state only after its asynchronous location and database requests.
