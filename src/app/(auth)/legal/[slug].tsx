@@ -3,6 +3,7 @@ import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'rea
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { WebView } from 'react-native-webview';
+import { Ionicons } from '@expo/vector-icons';
 import { LEGAL_URLS } from '@/lib/legal-links';
 import { supabase } from '@/lib/supabase-client';
 
@@ -15,6 +16,16 @@ export default function LegalDocumentScreen() {
   const webView = useRef<WebView>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const title = validSlug === 'privacy'
+    ? 'Politique de confidentialité'
+    : validSlug === 'terms'
+      ? 'Conditions d’utilisation'
+      : 'Document légal';
+
+  const goBack = () => {
+    if (router.canGoBack()) router.back();
+    else router.replace('/');
+  };
 
   useEffect(() => {
     if (!validSlug) return;
@@ -40,6 +51,17 @@ export default function LegalDocumentScreen() {
 
   return (
     <SafeAreaView style={styles.safe}>
+      <View style={styles.header}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={goBack}
+          accessibilityRole="button"
+          accessibilityLabel="Retour">
+          <Ionicons name="arrow-back" size={24} color="#101828" />
+        </TouchableOpacity>
+        <Text style={styles.title} numberOfLines={1}>{title}</Text>
+      </View>
+      <View style={styles.content}>
       {validSlug ? (
         <>
           {loading && !error ? (
@@ -58,9 +80,6 @@ export default function LegalDocumentScreen() {
                   webView.current?.reload();
                 }}>
                 <Text style={styles.retryText}>Réessayer</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => router.back()}>
-                <Text style={styles.backText}>Retour</Text>
               </TouchableOpacity>
             </View>
           ) : (
@@ -88,17 +107,27 @@ export default function LegalDocumentScreen() {
       ) : (
         <View style={styles.errorWrap}>
           <Text style={styles.errorText}>Document légal introuvable.</Text>
-          <TouchableOpacity onPress={() => router.back()}>
-            <Text style={styles.backText}>Retour</Text>
-          </TouchableOpacity>
         </View>
       )}
+      </View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#fff' },
+  header: {
+    minHeight: 56,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#E4E7EC',
+    paddingHorizontal: 12,
+    backgroundColor: '#fff',
+  },
+  backButton: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+  title: { flex: 1, marginLeft: 8, color: '#101828', fontSize: 16, fontWeight: '600' },
+  content: { flex: 1 },
   webview: { flex: 1, backgroundColor: '#fff' },
   hidden: { opacity: 0 },
   loading: { ...StyleSheet.absoluteFill, zIndex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff' },
@@ -106,5 +135,4 @@ const styles = StyleSheet.create({
   errorText: { color: '#475467', fontSize: 15, textAlign: 'center' },
   retry: { paddingHorizontal: 20, paddingVertical: 11, borderRadius: 10, backgroundColor: '#1877F2' },
   retryText: { color: '#fff', fontWeight: '700' },
-  backText: { color: '#1877F2', fontSize: 14, fontWeight: '600' },
 });
