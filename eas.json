@@ -10,21 +10,18 @@
       "android": { "buildType": "apk" }
     },
     "preview": {
-      "channel": "preview",
       "distribution": "internal",
       "android": { "buildType": "apk" },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://artisant-backend.onrender.com/api/v1",
+        "EXPO_PUBLIC_API_URL": "https://artisants-backend.onrender.com/api/v1",
         "EXPO_PUBLIC_SUPABASE_URL": "https://jzfggljkbyolnwaqsxym.supabase.co"
       }
     },
     "production": {
       "autoIncrement": true,
-      "channel": "production",
-      "environment": "production",
       "android": { "buildType": "app-bundle" },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://artisant-backend.onrender.com/api/v1",
+        "EXPO_PUBLIC_API_URL": "https://artisants-backend.onrender.com/api/v1",
         "EXPO_PUBLIC_SUPABASE_URL": "https://jzfggljkbyolnwaqsxym.supabase.co"
       }
     }

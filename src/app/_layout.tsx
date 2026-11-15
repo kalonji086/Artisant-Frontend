@@ -1,21 +1,20 @@
 import { useFonts } from 'expo-font';
 import * as SplashScreen from 'expo-splash-screen';
-import { AppState, Platform, View, ActivityIndicator, Text, TouchableOpacity } from 'react-native';
-import { StatusBar } from 'expo-status-bar';
-import * as Updates from 'expo-updates';
-import { SettingsProvider, useSettings } from '@/lib/settings-context';
-import { supabase } from '@/lib/supabase-client';
+import { Alert, View, ActivityIndicator } from 'react-native';
 import { useRouter, useSegments } from 'expo-router';
 import { AuthProvider, useAuth } from '@/lib/auth-context';
-import { useCallback, useEffect, useState } from 'react';
+import { UserPreferencesProvider } from '@/lib/user-preferences-context';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 
 import { SplashLoader } from '@/components/splash-loader';
 import AppTabs from '@/components/app-tabs';
 import { LocationTracker } from '@/components/location-tracker';
-import { PushNotifications } from '@/components/push-notifications';
+import { PushNotificationRegistration } from '@/components/push-notification-registration';
 
-SplashScreen.preventAutoHideAsync();
+void SplashScreen.preventAutoHideAsync().catch((error: unknown) => {
+  console.warn('[splash] Impossible de retarder l’écran natif:', error);
+});
 
 export default function TabLayout() {
   // Charger la police Ionicons avant le rendu — sinon les icônes
@@ -24,30 +23,27 @@ export default function TabLayout() {
   const [fontsLoaded, fontError] = useFonts({
     ...Ionicons.font,
   });
-  const [fontTimeout, setFontTimeout] = useState(false);
-  const fontsReady = fontsLoaded || !!fontError || fontTimeout;
+  const [fontLoadTimedOut, setFontLoadTimedOut] = useState(false);
 
   useEffect(() => {
-    if (fontsReady) return;
-
-    const timeout = setTimeout(() => {
-      console.error('[startup] chargement des polices trop long; démarrage sans les icônes.');
-      setFontTimeout(true);
-    }, 10_000);
-
+    if (fontsLoaded || fontError) return;
+    const timeout = setTimeout(() => setFontLoadTimedOut(true), 10_000);
     return () => clearTimeout(timeout);
-  }, [fontsReady]);
+  }, [fontsLoaded, fontError]);
+
+  const fontsReady = fontsLoaded || !!fontError || fontLoadTimedOut;
 
   useEffect(() => {
-    if (fontError) {
-      console.error('[startup] chargement de la police Ionicons impossible:', fontError);
+    if (fontError) console.warn('[splash] Chargement des icônes impossible:', fontError);
+    if (fontLoadTimedOut && !fontsLoaded && !fontError) {
+      console.warn('[splash] Délai de chargement des icônes dépassé; poursuite sans la police personnalisée.');
     }
     if (fontsReady) {
-      SplashScreen.hideAsync().catch((error: unknown) => {
-        console.error('[startup] fermeture de l’écran natif impossible:', error);
+      void SplashScreen.hideAsync().catch((error: unknown) => {
+        console.warn('[splash] Impossible de masquer l’écran natif:', error);
       });
     }
-  }, [fontsReady, fontError]);
+  }, [fontsReady, fontError, fontLoadTimedOut, fontsLoaded]);
 
   if (!fontsReady) {
     return (
@@ -59,136 +55,72 @@ export default function TabLayout() {
 
   return (
     <AuthProvider>
-      <SettingsProvider>
-        <ThemedStatusBar />
-        <OtaUpdateCheck />
+      <UserPreferencesProvider>
         <StartupSplash />
         <AuthGuard />
         <LocationTracker />
-        <PushNotifications />
+        <PushNotificationRegistration />
         <AppTabs />
-        <AnnouncementBanner />
-        <MaintenanceGate />
-      </SettingsProvider>
+      </UserPreferencesProvider>
     </AuthProvider>
-  );
-}
-
-function OtaUpdateCheck() {
-  useEffect(() => {
-    if (__DEV__ || Platform.OS === 'web' || !Updates.isEnabled) return;
-
-    let active = true;
-    let checking = false;
-    const checkForUpdate = async () => {
-      if (!active || checking) return;
-      checking = true;
-      try {
-        const update = await Updates.checkForUpdateAsync();
-        if (active && update.isAvailable) {
-          const result = await Updates.fetchUpdateAsync();
-          if (result.isNew) {
-            console.info('[updates] mise à jour téléchargée; elle sera appliquée au prochain lancement.');
-          }
-        }
-      } catch (error) {
-        console.warn('[updates] vérification ou téléchargement impossible:', error);
-      } finally {
-        checking = false;
-      }
-    };
-
-    void checkForUpdate();
-    const subscription = AppState.addEventListener('change', (state) => {
-      if (state === 'active') void checkForUpdate();
-    });
-
-    return () => {
-      active = false;
-      subscription.remove();
-    };
-  }, []);
-
-  return null;
-}
-
-function ThemedStatusBar() {
-  const { dark } = useSettings();
-  return <StatusBar style={dark ? 'light' : 'dark'} />;
-}
-
-function AnnouncementBanner() {
-  const { config, accent } = useSettings();
-  const [dismissed, setDismissed] = useState('');
-  if (!config.announcement || dismissed === config.announcement) return null;
-  return (
-    <View style={{ position: 'absolute', top: 0, left: 0, right: 0, backgroundColor: accent, paddingTop: 40, paddingBottom: 10, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-      <Text style={{ flex: 1, color: '#ffffff', fontSize: 13 }}>{config.announcement}</Text>
-      <TouchableOpacity onPress={() => setDismissed(config.announcement)} hitSlop={10}>
-        <Ionicons name="close" size={20} color="#ffffff" />
-      </TouchableOpacity>
-    </View>
-  );
-}
-
-// Bloque l'app (sauf admin) pendant la maintenance.
-function MaintenanceGate() {
-  const { config, colors, accent, t } = useSettings();
-  const { profile, session } = useAuth();
-  if (!config.maintenance_mode || profile?.role === 'admin') return null;
-  return (
-    <View style={{ position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center', padding: 32, gap: 14 }}>
-      <Ionicons name="construct" size={56} color={accent} />
-      <Text style={{ fontSize: 22, fontWeight: 'bold', color: colors.text, textAlign: 'center' }}>{t('maintenance.title')}</Text>
-      <Text style={{ fontSize: 15, color: colors.muted, textAlign: 'center' }}>{config.maintenance_message || t('maintenance.default')}</Text>
-      {!!session && (
-        <TouchableOpacity onPress={() => supabase.auth.signOut()}>
-          <Text style={{ color: accent, fontWeight: '600' }}>{t('maintenance.signout')}</Text>
-        </TouchableOpacity>
-      )}
-    </View>
   );
 }
 
 // Transition logo + barre de progression : à l'ouverture et après chaque connexion.
 function StartupSplash() {
-  const { session, role, loading } = useAuth();
+  const { session, loading, profileLoading } = useAuth();
   const userId = session?.user.id ?? null;
-  const ready = !loading && (!userId || !!role);
+  const ready = !loading && !profileLoading;
   return <SplashSession key={userId ?? 'guest'} ready={ready} first={!userId} />;
 }
 
 function SplashSession({ ready, first }: { ready: boolean; first: boolean }) {
   const [done, setDone] = useState(false);
-  const [startupFallback, setStartupFallback] = useState(false);
   const handleDone = useCallback(() => setDone(true), []);
-
-  useEffect(() => {
-    if (ready) return;
-
-    const timeout = setTimeout(() => {
-      console.warn('[startup] chargement trop long; fermeture de l’écran de démarrage.');
-      setStartupFallback(true);
-    }, 15_000);
-
-    return () => clearTimeout(timeout);
-  }, [ready]);
-
   if (done) return null;
-  return <SplashLoader ready={ready || startupFallback} onDone={handleDone} minDuration={first ? 2200 : 1500} />;
+  return <SplashLoader ready={ready} onDone={handleDone} minDuration={first ? 2200 : 1500} />;
 }
 
 // Redirige selon la session et le rôle :
 // pas connecté -> login ; client -> accueil ; artisan -> dashboard.
 function AuthGuard() {
-  const { session, role, loading } = useAuth();
+  const { session, profile, loading, profileLoading, profileError, refreshProfile, signOut } = useAuth();
   const segments = useSegments() as string[];
   const router = useRouter();
+  const promptedUser = useRef<string | null>(null);
 
   const inAuth = segments[0] === '(auth)';
-  const isForgotPassword = inAuth && segments[1] === 'forgot-password';
   const current = segments[0] ?? 'index';
+  const authPage = segments[1] ?? '';
+  const canStayInAuth = authPage === 'reset-password' || authPage === 'legal';
   const userId = session?.user.id;
+  const role = profile?.role;
+
+  useEffect(() => {
+    if (!userId || loading || profileLoading || role || !profileError || promptedUser.current === userId) return;
+    promptedUser.current = userId;
+    Alert.alert('Profil indisponible', profileError, [
+      {
+        text: 'Réessayer',
+        onPress: () => {
+          promptedUser.current = null;
+          void refreshProfile();
+        },
+      },
+      {
+        text: 'Se déconnecter',
+        style: 'destructive',
+        onPress: () => {
+          void signOut()
+            .then(() => router.replace('/(auth)/login'))
+            .catch((error: unknown) => {
+              console.error('[auth] Déconnexion impossible:', error);
+              Alert.alert('Erreur', 'Impossible de fermer la session. Réessayez.');
+            });
+        },
+      },
+    ]);
+  }, [userId, loading, profileLoading, role, profileError, refreshProfile, signOut, router]);
 
   useEffect(() => {
     if (loading) return;
@@ -196,16 +128,14 @@ function AuthGuard() {
       if (!inAuth) router.replace('/(auth)/login');
       return;
     }
-    if (!role) {
-      if (!inAuth) router.replace('/(auth)/login');
-      return;
-    }
-    if (inAuth && !isForgotPassword) {
+    if (!role) return; // profil en cours de chargement
+    if (inAuth) {
+      if (canStayInAuth) return;
       router.replace(role === 'artisan' ? '/dashboard' : '/');
     } else if (current === 'dashboard' && role !== 'artisan') {
       router.replace('/');
     }
-  }, [loading, userId, role, inAuth, isForgotPassword, current, router]);
+  }, [loading, userId, role, inAuth, current, authPage, canStayInAuth, router]);
 
   return null;
 }

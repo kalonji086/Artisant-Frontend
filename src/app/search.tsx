@@ -1,5 +1,3 @@
-import { useSettings } from '@/lib/settings-context';
-import { themedStyles } from '@/lib/themed-styles';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
@@ -8,11 +6,11 @@ import {
   FlatList,
   TouchableOpacity,
   ActivityIndicator,
+  StyleSheet,
   RefreshControl,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { api } from '@/lib/api';
-import { INPUT_PROPS } from '@/lib/input-colors';
+import api from '@/lib/api';
 
 type Artisan = {
   id: string;
@@ -24,11 +22,12 @@ type Artisan = {
 };
 
 export default function SearchScreen() {
-  useSettings();
   const [query, setQuery] = useState('');
   const [artisans, setArtisans] = useState<Artisan[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [offset, setOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const LIMIT = 10;
@@ -56,16 +55,20 @@ export default function SearchScreen() {
         if (append) {
           setArtisans((prev) => [...prev, ...results]);
           offsetRef.current += LIMIT;
+          setOffset(offsetRef.current);
         } else {
           setArtisans(results);
           offsetRef.current = LIMIT;
+          setOffset(LIMIT);
         }
         hasMoreRef.current = results.length >= LIMIT;
+        setHasMore(hasMoreRef.current);
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : 'Erreur de recherche';
         console.error(message);
         lastErrorAtRef.current = Date.now(); // Cooldown : bloque onEndReached pendant 10s
         hasMoreRef.current = false; // Stoppe la pagination en boucle après un échec
+        setHasMore(false);
       } finally {
         loadingRef.current = false;
         setLoading(false);
@@ -80,8 +83,11 @@ export default function SearchScreen() {
     if (debounceTimer.current) clearTimeout(debounceTimer.current);
 
     if (query.trim() === '') {
+      setArtisans([]);
       offsetRef.current = 0;
       hasMoreRef.current = true;
+      setOffset(0);
+      setHasMore(true);
       return;
     }
 
@@ -97,19 +103,10 @@ export default function SearchScreen() {
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
-    offsetRef.current = 0;
-    hasMoreRef.current = true;
+    setOffset(0);
+    setHasMore(true);
     fetchArtisans(false);
   }, [fetchArtisans]);
-
-  const onQueryChange = (value: string) => {
-    setQuery(value);
-    if (!value.trim()) {
-      setArtisans([]);
-      offsetRef.current = 0;
-      hasMoreRef.current = true;
-    }
-  };
 
   const onLoadMore = () => {
     // Garde-fous anti-boucle : ne paginer que si on a déjà des résultats,
@@ -128,11 +125,10 @@ export default function SearchScreen() {
         <View style={styles.searchRow}>
           <Ionicons name="search" size={20} color="#888" />
           <TextInput
-            {...INPUT_PROPS}
             style={styles.inputFlex}
             placeholder="Rechercher des artisans..."
             value={query}
-            onChangeText={onQueryChange}
+            onChangeText={setQuery}
             autoCapitalize="none"
             autoComplete="off"
             clearButtonMode="while-editing"
@@ -192,7 +188,7 @@ export default function SearchScreen() {
   );
 }
 
-const styles = themedStyles({
+const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
@@ -215,7 +211,6 @@ const styles = themedStyles({
     flex: 1,
     paddingVertical: 12,
     fontSize: 16,
-    color: '#222',
   },
   card: {
     backgroundColor: '#fff',

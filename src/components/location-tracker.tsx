@@ -22,14 +22,6 @@ export function LocationTracker() {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== 'granted' || cancelled) return;
-        const currentPosition = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-        });
-        if (cancelled) return;
-        await saveMyLocation({
-          latitude: currentPosition.coords.latitude,
-          longitude: currentPosition.coords.longitude,
-        });
         const sub = await Location.watchPositionAsync(
           {
             accuracy: Location.Accuracy.Balanced,

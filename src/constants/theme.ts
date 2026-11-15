@@ -24,6 +24,13 @@ export const Colors = {
   },
 } as const;
 
+export const AccentColors = {
+  blue: '#1877F2',
+  orange: '#F97316',
+  green: '#16A34A',
+  purple: '#7C3AED',
+} as const;
+
 export type ThemeColor = keyof typeof Colors.light & keyof typeof Colors.dark;
 
 export const Fonts = Platform.select({

@@ -1,407 +1,535 @@
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Image, Linking, ScrollView, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  Linking,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import * as ImagePicker from 'expo-image-picker';
+import { api } from '@/lib/api';
 import { supabase } from '@/lib/supabase-client';
 import { useAuth } from '@/lib/auth-context';
-import { useSettings, type LangPref, type ThemePref } from '@/lib/settings-context';
-import { themedStyles } from '@/lib/themed-styles';
-import { LegalModal } from '@/components/legal-modal';
-import { registerPushToken } from '@/components/push-notifications';
-import type { LegalKind } from '@/lib/legal-links';
-import { uploadAvatar } from '@/lib/avatar';
+import { AccentColors } from '@/constants/theme';
+import { useTheme } from '@/hooks/use-theme';
+import { useTranslate, useUserPreferences, type AccentColor, type ThemeMode, type AppLanguage } from '@/lib/user-preferences-context';
+import { registerPushToken } from '@/lib/push-notifications';
+import * as Notifications from 'expo-notifications';
 
-const SWATCHES = ['#007AFF', '#FF6B00', '#34C759', '#AF52DE', '#FF2D55', '#5856D6', '#00B8A9', '#8E6E53'];
-
-function Chip({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
-  return (
-    <TouchableOpacity style={[styles.chip, active && styles.chipActive]} onPress={onPress}>
-      <Text style={[styles.chipText, active && styles.chipTextActive]}>{label}</Text>
-    </TouchableOpacity>
-  );
-}
+type ProfileDraft = {
+  full_name: string;
+  phone: string;
+  city: string;
+  profession: string;
+  description: string;
+};
 
 export default function SettingsScreen() {
   const router = useRouter();
-  const { session, profile, refreshProfile, signOut } = useAuth();
-  const { t, prefs, prefsSyncError, setPrefs, resetPrefs, config, accent, colors } = useSettings();
+  const { session, profile, refreshProfile } = useAuth();
+  const { preferences, loading: preferencesLoading, error: preferencesError, updatePreferences } = useUserPreferences();
+  const theme = useTheme();
+  const t = useTranslate();
   const userId = session?.user.id;
   const isArtisan = profile?.role === 'artisan';
-  const [profileDraft, setProfileDraft] = useState<Partial<{ full_name: string; phone: string; city: string; profession: string; description: string }>>({});
-  const [profileBusy, setProfileBusy] = useState(false);
-  const [photoBusy, setPhotoBusy] = useState(false);
-  const [pushOn, setPushOn] = useState(false);
-  const [pushBusy, setPushBusy] = useState(false);
-  const [legal, setLegal] = useState<LegalKind | null>(null);
+  const [draft, setDraft] = useState<ProfileDraft>({
+    full_name: profile?.full_name ?? '',
+    phone: profile?.phone ?? '',
+    city: profile?.city ?? '',
+    profession: profile?.profession ?? '',
+    description: profile?.description ?? '',
+  });
+  const [saving, setSaving] = useState(false);
+  const [availabilityBusy, setAvailabilityBusy] = useState(false);
+  const [deletionBusy, setDeletionBusy] = useState(false);
+  const [preferencesBusy, setPreferencesBusy] = useState(false);
 
-  useEffect(() => {
-    if (!userId) return;
-    void supabase
-      .from('profiles')
-      .select('expo_push_token')
-      .eq('id', userId)
-      .maybeSingle()
-      .then(({ data, error }) => {
-        if (error) {
-          console.error('[settings] état des notifications impossible:', error.message);
-          return;
-        }
-        setPushOn(!!data?.expo_push_token);
-      });
-  }, [userId]);
-
-  const goBack = () => (router.canGoBack() ? router.back() : router.replace(isArtisan ? '/dashboard' : '/profile'));
-
-  const confirmSignOut = () => {
-    Alert.alert('Se déconnecter', 'Voulez-vous vraiment vous déconnecter de votre compte ?', [
-      { text: 'Annuler', style: 'cancel' },
-      { text: 'Se déconnecter', style: 'destructive', onPress: () => void signOut() },
-    ]);
-  };
-
-  const togglePush = async (value: boolean) => {
-    if (!userId) return;
-    setPushBusy(true);
-    if (value) {
-      try {
-        const result = await registerPushToken();
-        if (!result.ok) {
-          Alert.alert('Notifications non activées', result.reason);
-        } else {
-          setPushOn(true);
-        }
-      } catch (error) {
-        Alert.alert('Activation impossible', error instanceof Error ? error.message : 'Réessayez plus tard.');
-      } finally {
-        setPushBusy(false);
-      }
-    } else {
-      try {
-        const { error } = await supabase.rpc('set_my_push_token', { p_token: null });
-        if (error) throw error;
-        setPushOn(false);
-      } catch (error) {
-        Alert.alert('Désactivation impossible', error instanceof Error ? error.message : 'Réessayez plus tard.');
-      } finally {
-        setPushBusy(false);
-      }
-    }
-  };
-
-  const updateProfile = async (patch: { is_available?: boolean; phone_public?: boolean }) => {
-    if (!userId) return;
-    try {
-      const { error } = await supabase.from('profiles').update(patch).eq('id', userId);
-      if (error) throw error;
-      await refreshProfile();
-    } catch (error) {
-      Alert.alert('Mise à jour impossible', error instanceof Error ? error.message : 'Réessayez plus tard.');
-    }
+  const updateDraft = (key: keyof ProfileDraft, value: string) => {
+    setDraft((current) => ({ ...current, [key]: value }));
   };
 
   const saveProfile = async () => {
-    if (!userId) return;
-    const fullName = (profileDraft.full_name ?? profile?.full_name ?? '').trim();
-    if (!fullName) {
-      Alert.alert('Nom requis', 'Veuillez saisir votre nom.');
+    if (!userId || saving) return;
+    if (!draft.full_name.trim()) {
+      Alert.alert('Nom requis', 'Veuillez saisir votre nom complet.');
       return;
     }
-    if (Object.keys(profileDraft).length === 0) return;
-    setProfileBusy(true);
+
+    setSaving(true);
     try {
-      const { error } = await supabase.from('profiles').update({
-        ...(profileDraft.full_name !== undefined ? { full_name: fullName } : {}),
-        ...(profileDraft.phone !== undefined ? { phone: profileDraft.phone.trim() || null } : {}),
-        ...(profileDraft.city !== undefined ? { city: profileDraft.city.trim() || null } : {}),
-        ...(isArtisan ? {
-          ...(profileDraft.profession !== undefined ? { profession: profileDraft.profession.trim() || null } : {}),
-          ...(profileDraft.description !== undefined ? { description: profileDraft.description.trim() || null } : {}),
-        } : {}),
-      }).eq('id', userId);
+      const { data, error } = await supabase
+        .from('profiles')
+        .update({
+          full_name: draft.full_name.trim(),
+          phone: draft.phone.trim() || null,
+          city: draft.city.trim() || null,
+          ...(isArtisan
+            ? {
+                profession: draft.profession.trim() || null,
+                description: draft.description.trim() || null,
+              }
+            : {}),
+        })
+        .eq('id', userId)
+        .select('id')
+        .maybeSingle();
+
       if (error) throw error;
-      setProfileDraft({});
+      if (!data) throw new Error('Le profil n’a pas été modifié. Vérifiez vos droits puis réessayez.');
       await refreshProfile();
-      Alert.alert('Profil mis à jour', 'Vos informations ont été enregistrées.');
+      Alert.alert('Profil enregistré', 'Vos informations ont été mises à jour.');
     } catch (error) {
       Alert.alert('Enregistrement impossible', error instanceof Error ? error.message : 'Réessayez plus tard.');
     } finally {
-      setProfileBusy(false);
+      setSaving(false);
     }
   };
 
-  const changePhoto = async () => {
-    if (!userId || photoBusy) return;
-    setPhotoBusy(true);
+  const toggleAvailability = async (value: boolean) => {
+    if (!userId || availabilityBusy) return;
+    setAvailabilityBusy(true);
     try {
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        allowsEditing: true,
-        aspect: [1, 1],
-        quality: 1,
-      });
-      if (result.canceled || !result.assets[0]) return;
-      await uploadAvatar(userId, result.assets[0].uri, result.assets[0].mimeType ?? 'image/jpeg');
+      const { data, error } = await supabase
+        .from('profiles')
+        .update({ is_available: value })
+        .eq('id', userId)
+        .select('id')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error('Disponibilité non modifiée. Vérifiez vos droits puis réessayez.');
       await refreshProfile();
     } catch (error) {
-      Alert.alert('Photo non mise à jour', error instanceof Error ? error.message : 'Réessayez plus tard.');
+      Alert.alert('Mise à jour impossible', error instanceof Error ? error.message : 'Réessayez plus tard.');
     } finally {
-      setPhotoBusy(false);
+      setAvailabilityBusy(false);
     }
   };
 
-  const changePrefs = async (patch: Partial<typeof prefs>) => {
+  const savePreference = async (update: Parameters<typeof updatePreferences>[0]) => {
+    if (preferencesBusy || preferencesLoading) return;
+    setPreferencesBusy(true);
     try {
-      await setPrefs(patch);
+      await updatePreferences(update);
     } catch (error) {
-      Alert.alert('Synchronisation impossible', error instanceof Error ? error.message : 'La préférence reste appliquée sur cet appareil.');
+      Alert.alert(
+        t('Enregistrement impossible'),
+        error instanceof Error ? error.message : t('Veuillez réessayer.')
+      );
+    } finally {
+      setPreferencesBusy(false);
     }
   };
 
-  const restorePrefs = async () => {
+  const submitDeletionRequest = async () => {
+    if (deletionBusy) return;
+    setDeletionBusy(true);
     try {
-      await resetPrefs();
+      const result = await api.post('/account/deletion-requests');
+      Alert.alert(
+        result.already_requested ? 'Demande déjà reçue' : 'Demande envoyée',
+        result.already_requested
+          ? 'Une demande de suppression de votre compte est déjà en cours de traitement.'
+          : 'Votre demande de suppression a été transmise à notre équipe. Votre compte reste actif jusqu’à son traitement.'
+      );
     } catch (error) {
-      Alert.alert('Synchronisation impossible', error instanceof Error ? error.message : 'Les préférences restent appliquées sur cet appareil.');
+      Alert.alert(
+        'Envoi impossible',
+        error instanceof Error ? error.message : 'Veuillez réessayer plus tard.'
+      );
+    } finally {
+      setDeletionBusy(false);
     }
   };
 
-  const themes: { key: ThemePref; label: string }[] = [
-    { key: 'default', label: t('settings.followApp') },
-    { key: 'light', label: t('settings.theme.light') },
-    { key: 'dark', label: t('settings.theme.dark') },
-    { key: 'system', label: t('settings.theme.system') },
-  ];
-  const langs: { key: LangPref; label: string }[] = [
-    { key: 'default', label: t('settings.followApp') },
-    { key: 'fr', label: 'Français' },
-    { key: 'en', label: 'English' },
-  ];
-
-  const socials = [
-    ['logo-facebook', config.facebook_url],
-    ['logo-instagram', config.instagram_url],
-    ['logo-twitter', config.x_url],
-    ['logo-linkedin', config.linkedin_url],
-    ['logo-github', config.github_url],
-  ].filter((s): s is [string, string] => !!s[1]);
+  const confirmDeletionRequest = () => {
+    Alert.alert(
+      'Demander la suppression du compte',
+      'Votre demande sera transmise à notre équipe. Le compte ne sera pas supprimé immédiatement.',
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Envoyer la demande',
+          style: 'destructive',
+          onPress: () => void submitDeletionRequest(),
+        },
+      ]
+    );
+  };
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: colors.bg }]}>
-      <View style={styles.topBar}>
-        <TouchableOpacity onPress={goBack} hitSlop={12} accessibilityLabel={t('common.back')}>
-          <Ionicons name="arrow-back" size={26} color={accent} />
+    <SafeAreaView style={[styles.safe, { backgroundColor: theme.background }]}>
+      <View style={[styles.header, { backgroundColor: theme.background, borderBottomColor: theme.backgroundElement }]}>
+        <TouchableOpacity onPress={() => router.back()} accessibilityLabel="Retour">
+          <Ionicons name="arrow-back" size={23} color={theme.text} />
         </TouchableOpacity>
-        <View style={styles.flex}>
-          <Text style={styles.heading}>{t('settings.title')}</Text>
-          <Text style={styles.topSubtitle}>{t('settings.followHint')}</Text>
-        </View>
+        <Text style={[styles.title, { color: theme.text }]}>{t('Paramètres')}</Text>
       </View>
 
-      <ScrollView contentContainerStyle={styles.content}>
-        <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <View style={styles.cardHeading}>
-            <Ionicons name="person-circle-outline" size={20} color={accent} />
-            <Text style={[styles.cardTitle, { color: colors.text }]}>Mon profil</Text>
+      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        {preferencesError ? (
+          <Text style={styles.preferencesError}>
+            {t('Préférences indisponibles')}: {preferencesError}
+          </Text>
+        ) : null}
+        <View style={[styles.identity, { backgroundColor: theme.backgroundElement }]}>
+          <View style={[styles.avatar, { backgroundColor: theme.accent }]}>
+            <Text style={styles.avatarText}>
+              {(profile?.full_name?.trim().charAt(0) || 'A').toUpperCase()}
+            </Text>
           </View>
-          <View style={styles.profileHeader}>
-            <TouchableOpacity onPress={() => void changePhoto()} disabled={photoBusy} accessibilityRole="button" accessibilityLabel="Modifier la photo de profil">
-              <View style={[styles.accountAvatar, { backgroundColor: accent }]}>
-                {profile?.avatar_url
-                  ? <Image source={{ uri: profile.avatar_url }} style={styles.avatarImage} />
-                  : <Text style={styles.accountInitial}>{((profileDraft.full_name ?? profile?.full_name ?? '').trim().charAt(0) || 'A').toUpperCase()}</Text>}
-                <View style={styles.avatarEdit}>
-                  {photoBusy ? <ActivityIndicator size="small" color="#ffffff" /> : <Ionicons name="camera" size={15} color="#ffffff" />}
-                </View>
-              </View>
-            </TouchableOpacity>
-            <View style={styles.flex}>
-              <Text style={[styles.accountName, { color: colors.text }]}>{profile?.full_name ?? 'Mon compte'}</Text>
-              <Text style={styles.accountMeta}>{session?.user.email ?? ''}</Text>
-              <Text style={styles.roleBadge}>{isArtisan ? 'Compte artisan' : 'Compte client'}</Text>
-            </View>
+          <View style={styles.flex}>
+            <Text style={[styles.name, { color: theme.text }]}>{profile?.full_name ?? t('Mon compte')}</Text>
+            <Text style={[styles.muted, { color: theme.textSecondary }]}>{session?.user.email ?? ''}</Text>
+            <Text style={[styles.role, { color: theme.accent }]}>{isArtisan ? t('Compte artisan') : t('Compte client')}</Text>
           </View>
-          <Text style={styles.label}>Nom complet</Text>
-          <TextInput value={profileDraft.full_name ?? profile?.full_name ?? ''} onChangeText={(full_name) => setProfileDraft((prev) => ({ ...prev, full_name }))} style={[styles.input, { color: colors.text, borderColor: colors.border }]} placeholder="Votre nom" placeholderTextColor={colors.muted} />
-          <Text style={styles.label}>Téléphone</Text>
-          <TextInput value={profileDraft.phone ?? profile?.phone ?? ''} onChangeText={(phone) => setProfileDraft((prev) => ({ ...prev, phone }))} style={[styles.input, { color: colors.text, borderColor: colors.border }]} placeholder="Votre téléphone" placeholderTextColor={colors.muted} keyboardType="phone-pad" />
-          <Text style={styles.label}>Ville</Text>
-          <TextInput value={profileDraft.city ?? profile?.city ?? ''} onChangeText={(city) => setProfileDraft((prev) => ({ ...prev, city }))} style={[styles.input, { color: colors.text, borderColor: colors.border }]} placeholder="Votre ville" placeholderTextColor={colors.muted} />
-          {isArtisan && <>
-            <Text style={styles.label}>Profession</Text>
-            <TextInput value={profileDraft.profession ?? profile?.profession ?? ''} onChangeText={(profession) => setProfileDraft((prev) => ({ ...prev, profession }))} style={[styles.input, { color: colors.text, borderColor: colors.border }]} placeholder="Votre profession" placeholderTextColor={colors.muted} />
-            <Text style={styles.label}>Description</Text>
-            <TextInput value={profileDraft.description ?? profile?.description ?? ''} onChangeText={(description) => setProfileDraft((prev) => ({ ...prev, description }))} style={[styles.input, styles.descriptionInput, { color: colors.text, borderColor: colors.border }]} placeholder="Présentez vos services" placeholderTextColor={colors.muted} multiline />
-          </>}
-          <TouchableOpacity style={[styles.saveButton, { backgroundColor: accent }]} onPress={() => void saveProfile()} disabled={profileBusy || Object.keys(profileDraft).length === 0}>
-            {profileBusy ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.saveButtonText}>Enregistrer mon profil</Text>}
+        </View>
+
+        <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
+          <Text style={[styles.sectionTitle, { color: theme.text }]}>{t('Informations du profil')}</Text>
+          <Field theme={theme} t={t} label="Nom complet" value={draft.full_name} onChangeText={(value) => updateDraft('full_name', value)} />
+          <Field theme={theme} t={t} label="Téléphone" value={draft.phone} onChangeText={(value) => updateDraft('phone', value)} keyboardType="phone-pad" />
+          <Field theme={theme} t={t} label="Ville" value={draft.city} onChangeText={(value) => updateDraft('city', value)} />
+          {isArtisan && (
+            <>
+              <Field theme={theme} t={t} label="Profession" value={draft.profession} onChangeText={(value) => updateDraft('profession', value)} />
+              <Field
+                theme={theme}
+                t={t}
+                label="Description de vos services"
+                value={draft.description}
+                onChangeText={(value) => updateDraft('description', value)}
+                multiline
+              />
+            </>
+          )}
+          <TouchableOpacity style={[styles.primaryButton, { backgroundColor: theme.accent }]} onPress={() => void saveProfile()} disabled={saving}>
+            {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryButtonText}>{t('Enregistrer')}</Text>}
           </TouchableOpacity>
         </View>
 
-        <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <View style={styles.cardHeading}>
-            <Ionicons name="color-palette-outline" size={20} color={accent} />
-            <Text style={styles.cardTitle}>{t('settings.appearance')}</Text>
-          </View>
-          <Text style={styles.label}>{t('settings.theme')}</Text>
-          <View style={styles.row}>
-            {themes.map((x) => (
-              <Chip key={x.key} label={x.label} active={prefs.theme === x.key} onPress={() => void changePrefs({ theme: x.key })} />
-            ))}
-          </View>
-          <Text style={styles.label}>{t('settings.color')}</Text>
-          <View style={styles.row}>
-            <Chip label={t('settings.followApp')} active={prefs.accent === null} onPress={() => void changePrefs({ accent: null })} />
-            {SWATCHES.map((c) => (
-              <TouchableOpacity
-                key={c}
-                onPress={() => void changePrefs({ accent: c })}
-                style={[styles.swatch, { backgroundColor: c }, prefs.accent === c && { borderColor: colors.text }]}>
-                {prefs.accent === c && <Ionicons name="checkmark" size={16} color="#ffffff" />}
-              </TouchableOpacity>
-            ))}
-          </View>
-          {!!prefsSyncError && <Text style={styles.errorHint}>{prefsSyncError}</Text>}
-          <Text style={styles.label}>{t('settings.language')}</Text>
-          <View style={styles.row}>
-            {langs.map((x) => (
-              <Chip key={x.key} label={x.label} active={prefs.language === x.key} onPress={() => void changePrefs({ language: x.key })} />
-            ))}
-          </View>
-        </View>
-
-        <View style={styles.card}>
-          <View style={styles.cardHeading}>
-            <Ionicons name="notifications-outline" size={20} color={accent} />
-            <Text style={styles.cardTitle}>{t('settings.notifications')}</Text>
-          </View>
-          <View style={styles.switchRow}>
-            <View style={styles.flex}>
-              <Text style={styles.value}>{t('settings.push')}</Text>
-              <Text style={styles.hint}>{pushOn ? t('settings.pushOn') : t('settings.pushOff')}</Text>
-            </View>
-            <Switch value={pushOn} onValueChange={togglePush} disabled={pushBusy} trackColor={{ true: accent }} />
-          </View>
-        </View>
-
         {isArtisan && (
-          <View style={styles.card}>
-            <View style={styles.cardHeading}>
-              <Ionicons name="person-outline" size={20} color={accent} />
-              <Text style={styles.cardTitle}>{t('settings.account')}</Text>
-            </View>
-            <View style={styles.switchRow}>
-              <Text style={[styles.value, styles.flex]}>{t('settings.available')}</Text>
-              <Switch value={!!profile?.is_available} onValueChange={(v) => updateProfile({ is_available: v })} trackColor={{ true: accent }} />
-            </View>
-            <View style={styles.switchRow}>
-              <Text style={[styles.value, styles.flex]}>{t('settings.phonePublic')}</Text>
-              <Switch value={!!profile?.phone_public} onValueChange={(v) => updateProfile({ phone_public: v })} trackColor={{ true: accent }} />
+          <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
+            <View style={styles.availabilityRow}>
+              <View style={styles.flex}>
+                <Text style={[styles.sectionTitle, { color: theme.text }]}>{t('Disponibilité')}</Text>
+                <Text style={[styles.muted, { color: theme.textSecondary }]}>
+                  {profile?.is_available ? t('Votre profil apparaît dans la recherche.') : t('Votre profil est masqué de la recherche.')}
+                </Text>
+              </View>
+              <Switch
+                value={!!profile?.is_available}
+                onValueChange={(value) => void toggleAvailability(value)}
+                disabled={availabilityBusy}
+                trackColor={{ true: theme.accent }}
+              />
             </View>
           </View>
         )}
 
-        <View style={styles.card}>
-          <View style={styles.cardHeading}>
-            <Ionicons name="help-circle-outline" size={20} color={accent} />
-            <Text style={styles.cardTitle}>{t('settings.platform')}</Text>
-          </View>
-          <Text style={styles.value}>{config.platform_name}</Text>
-          {!!config.support_email && (
-            <TouchableOpacity onPress={() => Linking.openURL(`mailto:${config.support_email}`)}>
-              <Text style={styles.link}>{t('settings.support')} : {config.support_email}</Text>
-            </TouchableOpacity>
-          )}
-          {!!config.contact_email && (
-            <TouchableOpacity onPress={() => Linking.openURL(`mailto:${config.contact_email}`)}>
-              <Text style={styles.link}>{t('settings.contact')} : {config.contact_email}</Text>
-            </TouchableOpacity>
-          )}
-          {socials.length > 0 && (
-            <View style={styles.row}>
-              {socials.map(([icon, url]) => (
-                <TouchableOpacity key={icon} onPress={() => Linking.openURL(url)} hitSlop={8}>
-                  <Ionicons name={icon as keyof typeof Ionicons.glyphMap} size={26} color={accent} />
-                </TouchableOpacity>
-              ))}
-            </View>
-          )}
-          <Text style={styles.hint}>● {t('settings.live')}</Text>
-        </View>
-
-        <View style={styles.card}>
-          <View style={styles.cardHeading}>
-            <Ionicons name="document-text-outline" size={20} color={accent} />
-            <Text style={styles.cardTitle}>{t('settings.legal')}</Text>
-          </View>
-          <TouchableOpacity style={styles.linkRow} onPress={() => setLegal('privacy')}>
-            <Text style={styles.value}>{t('settings.privacy')}</Text>
-            <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+        <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
+          <Text style={[styles.sectionTitle, { color: theme.text }]}>{t('Informations légales')}</Text>
+          <TouchableOpacity style={styles.linkRow} onPress={() => router.push('/(auth)/legal/privacy')}>
+            <Text style={[styles.linkText, { color: theme.accent }]}>{t('Politique de confidentialité')}</Text>
+            <Ionicons name="chevron-forward" size={18} color={theme.accent} />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.linkRow} onPress={() => setLegal('terms')}>
-            <Text style={styles.value}>{t('settings.terms')}</Text>
-            <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+          <TouchableOpacity style={styles.linkRow} onPress={() => router.push('/(auth)/legal/terms')}>
+            <Text style={[styles.linkText, { color: theme.accent }]}>{t('Conditions d’utilisation')}</Text>
+            <Ionicons name="chevron-forward" size={18} color={theme.accent} />
           </TouchableOpacity>
         </View>
 
-        <TouchableOpacity style={styles.reset} onPress={() => void restorePrefs()}>
-          <Text style={styles.resetText}>{t('settings.reset')}</Text>
-        </TouchableOpacity>
+        <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
+          <Text style={[styles.sectionTitle, { color: theme.text }]}>{t('Notifications en temps réel')}</Text>
+          <PreferenceSwitch
+            title={t('Être averti des nouveaux messages')}
+            value={preferences.notify_messages}
+            disabled={preferencesBusy || preferencesLoading}
+            accent={theme.accent}
+            onChange={(notify_messages) => void savePreference({ notify_messages })}
+          />
+          <PreferenceSwitch
+            title={t('Être averti de mes demandes de devis')}
+            value={preferences.notify_quotes}
+            disabled={preferencesBusy || preferencesLoading}
+            accent={theme.accent}
+            onChange={(notify_quotes) => void savePreference({ notify_quotes })}
+          />
+          <PushPermissionRow userId={userId} theme={theme} t={t} />
+          {preferencesLoading ? <ActivityIndicator color={theme.accent} /> : null}
+        </View>
 
-        <TouchableOpacity
-          style={styles.signOut}
-          onPress={confirmSignOut}
-          accessibilityRole="button"
-          accessibilityLabel="Se déconnecter">
-          <Ionicons name="log-out-outline" size={20} color="#D92D20" />
-          <Text style={styles.signOutText}>Se déconnecter</Text>
-        </TouchableOpacity>
+        <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
+          <Text style={[styles.sectionTitle, { color: theme.text }]}>{t('Apparence')}</Text>
+          <OptionSelector
+            title={t('Thème')}
+            value={preferences.theme_mode}
+            disabled={preferencesBusy || preferencesLoading}
+            theme={theme}
+            options={[
+              { value: 'system', label: t('Suivre l’appareil') },
+              { value: 'light', label: t('Clair') },
+              { value: 'dark', label: t('Sombre') },
+            ]}
+            onChange={(theme_mode) => void savePreference({ theme_mode: theme_mode as ThemeMode })}
+          />
+          <OptionSelector
+            title={t('Couleur')}
+            value={preferences.accent_color}
+            disabled={preferencesBusy || preferencesLoading}
+            theme={theme}
+            options={[
+              { value: 'blue', label: t('Bleu'), color: AccentColors.blue },
+              { value: 'orange', label: t('Orange'), color: AccentColors.orange },
+              { value: 'green', label: t('Vert'), color: AccentColors.green },
+              { value: 'purple', label: t('Violet'), color: AccentColors.purple },
+            ]}
+            onChange={(accent_color) => void savePreference({ accent_color: accent_color as AccentColor })}
+          />
+          <OptionSelector
+            title={t('Langue')}
+            value={preferences.language}
+            disabled={preferencesBusy || preferencesLoading}
+            theme={theme}
+            options={[
+              { value: 'fr', label: t('Français') },
+              { value: 'en', label: t('Anglais') },
+            ]}
+            onChange={(language) => void savePreference({ language: language as AppLanguage })}
+          />
+        </View>
+
+        <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
+          <Text style={[styles.sectionTitle, { color: theme.text }]}>{t('Zone de confidentialité')}</Text>
+          <Text style={[styles.muted, { color: theme.textSecondary }]}>
+            {t('Vous pouvez transmettre une demande de suppression de votre compte à notre équipe.')}
+          </Text>
+          <TouchableOpacity
+            style={[styles.deleteButton, { backgroundColor: theme.background, borderColor: theme.backgroundSelected }]}
+            onPress={confirmDeletionRequest}
+            disabled={deletionBusy}>
+            {deletionBusy ? (
+              <ActivityIndicator color="#b42318" />
+            ) : (
+              <>
+                <Ionicons name="trash-outline" size={18} color="#b42318" />
+                <Text style={styles.deleteButtonText}>{t('Demander la suppression du compte')}</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </View>
       </ScrollView>
-
-      {legal && <LegalModal kind={legal} onClose={() => setLegal(null)} />}
     </SafeAreaView>
   );
 }
 
-const styles = themedStyles({
+function PushPermissionRow({
+  userId,
+  theme,
+  t,
+}: {
+  userId: string | undefined;
+  theme: ReturnType<typeof useTheme>;
+  t: (text: string) => string;
+}) {
+  const [granted, setGranted] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    let active = true;
+    void Notifications.getPermissionsAsync()
+      .then((permission) => {
+        if (active) setGranted(permission.granted);
+      })
+      .catch((error: unknown) => {
+        console.warn('[push] Lecture des autorisations impossible:', error);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  if (Platform.OS === 'web') return null;
+
+  const enable = async () => {
+    if (!userId || busy) return;
+    setBusy(true);
+    try {
+      const permission = await registerPushToken(userId);
+      setGranted(permission.granted);
+      if (!permission.granted && !permission.canAskAgain) await Linking.openSettings();
+    } catch (error) {
+      Alert.alert(
+        t('Notifications push indisponibles'),
+        error instanceof Error ? error.message : t('Veuillez réessayer.')
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <View style={styles.preferenceRow}>
+      <View style={styles.flex}>
+        <Text style={[styles.preferenceLabel, { color: theme.text }]}>{t('Notifications système')}</Text>
+        <Text style={[styles.muted, { color: theme.textSecondary }]}>
+          {t(granted ? 'Activées sur cet appareil' : 'Désactivées sur cet appareil')}
+        </Text>
+      </View>
+      <TouchableOpacity
+        style={[styles.pushButton, { borderColor: theme.accent }]}
+        onPress={() => void enable()}
+        disabled={busy || granted || !userId}>
+        {busy ? (
+          <ActivityIndicator color={theme.accent} />
+        ) : (
+          <Text style={[styles.pushButtonText, { color: theme.accent }]}>
+            {t(granted ? 'Activées' : 'Autoriser')}
+          </Text>
+        )}
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+function Field({
+  label,
+  theme,
+  t,
+  ...props
+}: React.ComponentProps<typeof TextInput> & {
+  label: string;
+  theme: ReturnType<typeof useTheme>;
+  t: (text: string) => string;
+}) {
+  return (
+    <View style={styles.field}>
+      <Text style={[styles.label, { color: theme.textSecondary }]}>{t(label)}</Text>
+      <TextInput
+        {...props}
+        style={[
+          styles.input,
+          { color: theme.text, backgroundColor: theme.background, borderColor: theme.backgroundSelected },
+          props.multiline && styles.multiline,
+        ]}
+        placeholderTextColor="#98a2b3"
+      />
+    </View>
+  );
+}
+
+function PreferenceSwitch({
+  title,
+  value,
+  disabled,
+  accent,
+  onChange,
+}: {
+  title: string;
+  value: boolean;
+  disabled: boolean;
+  accent: string;
+  onChange: (value: boolean) => void;
+}) {
+  const theme = useTheme();
+  return (
+    <View style={styles.preferenceRow}>
+      <Text style={[styles.preferenceLabel, { color: theme.text }]}>{title}</Text>
+      <Switch
+        value={value}
+        onValueChange={onChange}
+        disabled={disabled}
+        trackColor={{ true: accent }}
+      />
+    </View>
+  );
+}
+
+function OptionSelector({
+  title,
+  value,
+  disabled,
+  theme,
+  options,
+  onChange,
+}: {
+  title: string;
+  value: string;
+  disabled: boolean;
+  theme: ReturnType<typeof useTheme>;
+  options: { value: string; label: string; color?: string }[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <View style={styles.optionGroup}>
+      <Text style={[styles.label, { color: theme.textSecondary }]}>{title}</Text>
+      <View style={styles.optionList}>
+        {options.map((option) => (
+          <TouchableOpacity
+            key={option.value}
+            style={[
+              styles.option,
+              {
+                backgroundColor: value === option.value ? theme.accent : theme.background,
+                borderColor: value === option.value ? theme.accent : theme.backgroundSelected,
+              },
+            ]}
+            onPress={() => onChange(option.value)}
+            disabled={disabled}
+            accessibilityRole="radio"
+            accessibilityState={{ selected: value === option.value }}>
+            {option.color ? <View style={[styles.colorDot, { backgroundColor: option.color }]} /> : null}
+            <Text style={[styles.optionText, { color: value === option.value ? '#fff' : theme.text }]}>
+              {option.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: '#f3f5f8' },
   flex: { flex: 1 },
-  safe: { flex: 1, backgroundColor: '#f5f5f5' },
-  topBar: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 18, paddingVertical: 14 },
-  heading: { fontSize: 22, fontWeight: 'bold', color: '#222' },
-  topSubtitle: { color: '#777', fontSize: 12, marginTop: 2 },
-  content: { paddingHorizontal: 16, paddingTop: 8, gap: 14, paddingBottom: 40 },
-  hint: { fontSize: 12, color: '#666' },
-  accountCard: { flexDirection: 'row', alignItems: 'center', gap: 14, backgroundColor: '#fff', borderRadius: 18, padding: 16, marginBottom: 2 },
-  accountAvatar: { width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center' },
-  avatarImage: { width: 52, height: 52, borderRadius: 26 },
-  avatarEdit: { position: 'absolute', right: -2, bottom: -2, width: 22, height: 22, borderRadius: 11, backgroundColor: '#303030', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#ffffff' },
-  profileHeader: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingBottom: 4 },
-  accountInitial: { color: '#fff', fontSize: 22, fontWeight: '700' },
-  accountName: { color: '#222', fontSize: 16, fontWeight: '700' },
-  accountMeta: { color: '#777', fontSize: 12, marginTop: 3 },
-  roleBadge: { color: '#007AFF', fontSize: 11, fontWeight: '600', marginTop: 5 },
-  card: { backgroundColor: '#fff', borderRadius: 16, padding: 16, gap: 12, borderWidth: 1, borderColor: '#eeeeee' },
-  cardHeading: { flexDirection: 'row', alignItems: 'center', gap: 9, paddingBottom: 3 },
-  cardTitle: { fontSize: 16, fontWeight: '700', color: '#222' },
-  label: { fontSize: 13, fontWeight: '600', color: '#666' },
-  value: { fontSize: 15, color: '#222' },
-  input: { minHeight: 44, borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9, fontSize: 15 },
-  descriptionInput: { minHeight: 90, textAlignVertical: 'top' },
-  saveButton: { minHeight: 46, borderRadius: 11, alignItems: 'center', justifyContent: 'center', marginTop: 4 },
-  saveButtonText: { color: '#ffffff', fontWeight: '700', fontSize: 14 },
-  errorHint: { fontSize: 12, color: '#b42318' },
-  link: { fontSize: 14, color: '#007AFF' },
-  row: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' },
-  chip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 18, backgroundColor: '#f2f2f2', borderWidth: 1, borderColor: '#ddd' },
-  chipActive: { backgroundColor: '#007AFF', borderColor: '#007AFF' },
-  chipText: { color: '#333', fontWeight: '600', fontSize: 13 },
-  chipTextActive: { color: '#ffffff' },
-  swatch: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: 'transparent' },
-  switchRow: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 48, paddingVertical: 4 },
-  linkRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 42, borderTopWidth: 1, borderTopColor: '#eeeeee' },
-  reset: { alignItems: 'center', padding: 10 },
-  resetText: { color: '#FF3B30', fontWeight: '600' },
-  signOut: { minHeight: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9, backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: '#F3C7C4', marginTop: 2 },
-  signOutText: { color: '#D92D20', fontSize: 15, fontWeight: '700' },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 16, paddingHorizontal: 20, paddingVertical: 14, backgroundColor: '#fff' },
+  title: { color: '#101828', fontSize: 20, fontWeight: '800' },
+  content: { padding: 16, gap: 14, paddingBottom: 36 },
+  identity: { flexDirection: 'row', alignItems: 'center', gap: 14, padding: 16, backgroundColor: '#fff', borderRadius: 16 },
+  avatar: { width: 54, height: 54, borderRadius: 27, alignItems: 'center', justifyContent: 'center', backgroundColor: '#1877F2' },
+  avatarText: { color: '#fff', fontSize: 22, fontWeight: '800' },
+  name: { color: '#101828', fontSize: 16, fontWeight: '800' },
+  muted: { color: '#667085', fontSize: 13, marginTop: 3 },
+  role: { color: '#1877F2', fontSize: 12, fontWeight: '700', marginTop: 5 },
+  card: { padding: 16, gap: 14, borderRadius: 16, backgroundColor: '#fff' },
+  sectionTitle: { color: '#101828', fontSize: 15, fontWeight: '800' },
+  field: { gap: 6 },
+  label: { color: '#475467', fontSize: 13, fontWeight: '600' },
+  input: { minHeight: 46, paddingHorizontal: 12, borderWidth: 1, borderColor: '#d0d5dd', borderRadius: 10, color: '#101828', fontSize: 15, backgroundColor: '#fff' },
+  multiline: { minHeight: 100, paddingTop: 12, textAlignVertical: 'top' },
+  primaryButton: { minHeight: 46, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: '#1877F2' },
+  primaryButtonText: { color: '#fff', fontWeight: '700', fontSize: 15 },
+  availabilityRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  linkRow: { minHeight: 42, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderTopWidth: 1, borderTopColor: '#eaecf0' },
+  linkText: { color: '#1877F2', fontWeight: '600', fontSize: 14 },
+  preferencesError: { color: '#b42318', backgroundColor: '#fef3f2', padding: 12, borderRadius: 10, fontSize: 13 },
+  preferenceRow: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  pushButton: { minHeight: 36, justifyContent: 'center', borderWidth: 1, borderRadius: 18, paddingHorizontal: 12 },
+  pushButtonText: { fontSize: 13, fontWeight: '700' },
+  preferenceLabel: { flex: 1, fontSize: 14, fontWeight: '600' },
+  optionGroup: { gap: 8 },
+  optionList: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  option: { minHeight: 38, flexDirection: 'row', alignItems: 'center', gap: 7, borderWidth: 1, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 7 },
+  optionText: { fontSize: 13, fontWeight: '700' },
+  colorDot: { width: 14, height: 14, borderRadius: 7 },
+  deleteButton: { minHeight: 46, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 10, borderWidth: 1, borderColor: '#fecdca', backgroundColor: '#fff', paddingHorizontal: 12 },
+  deleteButtonText: { color: '#b42318', fontWeight: '700', fontSize: 14 },
 });

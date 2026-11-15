@@ -8,49 +8,40 @@
     "scheme": "artisant",
     "userInterfaceStyle": "automatic",
     "android": {
-      "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "backgroundColor": "#FFFFFF",
         "foregroundImage": "./assets/images/android-icon-foreground.png"
       },
       "predictiveBackGestureEnabled": false,
-      "softwareKeyboardLayoutMode": "resize",
       "package": "com.artisants.app",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ],
       "blockedPermissions": [
         "ACCESS_BACKGROUND_LOCATION",
+        "RECORD_AUDIO",
         "READ_EXTERNAL_STORAGE",
         "WRITE_EXTERNAL_STORAGE",
         "SYSTEM_ALERT_WINDOW"
-      ],
-      "permissions": [
-        "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.ACCESS_FINE_LOCATION"
       ]
     },
     "web": {
       "output": "static",
       "favicon": "./assets/images/favicon.png"
     },
-    "updates": {
-      "enabled": true,
-      "checkAutomatically": "NEVER",
-      "fallbackToCacheTimeout": 0
-    },
-    "runtimeVersion": {
-      "policy": "fingerprint"
-    },
     "plugins": [
       "expo-router",
-      "expo-updates",
+      "expo-notifications",
       [
         "expo-build-properties",
         {
           "android": {
             "compileSdkVersion": 36,
             "targetSdkVersion": 36,
-            "buildToolsVersion": "36.0.0",
-            "enableMinifyInReleaseBuilds": true,
-            "enableShrinkResourcesInReleaseBuilds": true
+            "buildToolsVersion": "36.0.0"
           }
         }
       ],
@@ -68,15 +59,7 @@
           "imageWidth": 150
         }
       ],
-      [
-        "expo-image-picker",
-        {
-          "microphonePermission": false,
-          "cameraPermission": "Artisants utilise la caméra pour prendre votre photo de profil.",
-          "photosPermission": "Artisants accède à vos photos pour choisir votre photo de profil."
-        }
-      ],
-      "expo-notifications"
+      "expo-build-properties"
     ],
     "experiments": {
       "reactCompiler": true
@@ -87,7 +70,6 @@
       "eas": {
         "projectId": "09a6e4cb-93cb-4525-b436-708df598e470"
       }
-    },
-    "owner": "zuwandakus-team"
+    }
   }
 }

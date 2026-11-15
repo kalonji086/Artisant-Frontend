@@ -1,12 +1,8 @@
-import { useSettings } from '@/lib/settings-context';
-import { themedStyles } from '@/lib/themed-styles';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
-  Image,
-  Linking,
   ScrollView,
+  StyleSheet,
   Text,
   TouchableOpacity,
   View,
@@ -16,18 +12,12 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase-client';
 import { useAuth } from '@/lib/auth-context';
-import {
-  formatDistance,
-  getCurrentCoords,
-  getRouteDistance,
-  saveMyLocation,
-  type Coords,
-  type TravelMode,
-} from '@/lib/location';
-import { getRelatedProfessions, PROFESSIONS } from '@/lib/professions';
+import { formatDistance, getCurrentCoords, saveMyLocation, type Coords } from '@/lib/location';
+import { PROFESSIONS } from '@/lib/professions';
 import { errorMessage } from '@/lib/errors';
 import { ArtisanMap } from '@/components/artisan-map';
-import { NotificationBell } from '@/components/notification-bell';
+import { useTheme } from '@/hooks/use-theme';
+import { useTranslate } from '@/lib/user-preferences-context';
 
 type NearbyArtisan = {
   id: string;
@@ -36,107 +26,49 @@ type NearbyArtisan = {
   description: string | null;
   city: string | null;
   rating: number | null;
-  avatar_url: string | null;
   distance_m: number;
   latitude: number;
   longitude: number;
-  phone: string | null;
-  is_online: boolean | null;
 };
 
-const RADIUS_METERS = 50000;
+const RADIUS_METERS = 50_000;
 
 export default function HomeScreen() {
-  useSettings();
   const router = useRouter();
-  const { profile, session } = useAuth();
+  const { profile } = useAuth();
+  const theme = useTheme();
+  const t = useTranslate();
   const [artisans, setArtisans] = useState<NearbyArtisan[]>([]);
-  const [suggestedArtisans, setSuggestedArtisans] = useState<NearbyArtisan[]>([]);
   const [filter, setFilter] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [me, setMe] = useState<Coords | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [travelMode, setTravelMode] = useState<TravelMode>('car');
-  const [routeDistance, setRouteDistance] = useState<number | null>(null);
-  const [routeLoading, setRouteLoading] = useState(false);
-  const [routeUnavailable, setRouteUnavailable] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [portfolioData, setPortfolioData] = useState<{ artisanId: string; items: string[] } | null>(null);
-  const [reviewsData, setReviewsData] = useState<{
-    artisanId: string;
-    items: { id: string; client_name: string | null; rating: number; comment: string | null }[];
-  } | null>(null);
-  const meRef = useRef<Coords | null>(null);
-  const selected = artisans.find((a) => a.id === selectedId) ?? null;
-  const selectedSuggested = suggestedArtisans.find((a) => a.id === selectedId) ?? null;
-  const selectedOwnProfile = useMemo<NearbyArtisan | null>(
-    () => selectedId === session?.user.id && profile?.role === 'artisan' && me
-      ? {
-          id: profile.id,
-          full_name: profile.full_name,
-          profession: profile.profession,
-          description: profile.description,
-          city: profile.city,
-          rating: profile.rating,
-          avatar_url: profile.avatar_url,
-          distance_m: 0,
-          latitude: me.latitude,
-          longitude: me.longitude,
-          phone: profile.phone,
-          is_online: true,
-        }
-      : null,
-    [selectedId, session?.user.id, profile, me],
-  );
-  const selectedProfile = selectedOwnProfile ?? selected ?? selectedSuggested;
-  const travelModes: { id: TravelMode; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
-    { id: 'foot', label: 'À pied', icon: 'walk-outline' },
-    { id: 'bike', label: 'Vélo', icon: 'bicycle-outline' },
-    { id: 'car', label: 'Voiture', icon: 'car-outline' },
-  ];
+  const hasLocation = me !== null;
+  const requestId = useRef(0);
+  const realtimeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => {
-    if (!selectedProfile || !me) return;
-    if (selectedProfile.id === session?.user.id) return;
+  const load = useCallback(async (quiet = false) => {
+    const request = ++requestId.current;
+    if (!quiet) setLoading(true);
+    setError(null);
 
-    let active = true;
-    const controller = new AbortController();
-    // Loading state mirrors the active route request.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setRouteLoading(true);
-    setRouteDistance(null);
-    setRouteUnavailable(false);
-    void getRouteDistance(
-      me,
-      { latitude: selectedProfile.latitude, longitude: selectedProfile.longitude },
-      travelMode,
-      controller.signal,
-    )
-      .then((distance) => {
-        if (active) setRouteDistance(distance);
-      })
-      .catch((err: unknown) => {
-        if (active) {
-          console.warn('[home] calcul de l’itinéraire impossible:', err instanceof Error ? err.message : err);
-          setRouteDistance(null);
-          setRouteUnavailable(true);
-        }
-      })
-      .finally(() => {
-        if (active) setRouteLoading(false);
+    try {
+      const coords = await getCurrentCoords();
+      if (request !== requestId.current) return;
+      if (!coords) {
+        setArtisans([]);
+        setMe(null);
+        setError('Autorisez la localisation pour afficher les artisans autour de vous.');
+        return;
+      }
+
+      setMe(coords);
+      void saveMyLocation(coords).catch((err: unknown) => {
+        console.warn('[home] Enregistrement de la position impossible:', errorMessage(err, 'erreur inconnue'));
       });
 
-    return () => {
-      active = false;
-      controller.abort();
-    };
-  }, [selectedProfile, me, session?.user.id, travelMode]);
-  const portfolio = portfolioData?.artisanId === selectedId ? portfolioData.items : [];
-  const reviews = reviewsData?.artisanId === selectedId ? reviewsData.items : [];
-
-  const fetchArtisans = useCallback(
-    async (coords: Coords) => {
       const { data, error: rpcError } = await supabase.rpc('nearby_artisans', {
         lat: coords.latitude,
         lng: coords.longitude,
@@ -144,392 +76,230 @@ export default function HomeScreen() {
         profession_filter: filter,
       });
       if (rpcError) throw rpcError;
-      const nearby = ((data as NearbyArtisan[]) ?? []).filter((artisan) => artisan.id !== session?.user.id);
-      setArtisans(nearby);
-      if (filter && nearby.length === 0) {
-        const { data: suggestions, error: suggestionError } = await supabase.rpc('nearby_artisans', {
-          lat: coords.latitude,
-          lng: coords.longitude,
-          radius_meters: RADIUS_METERS,
-          profession_filter: null,
-        });
-        if (suggestionError) throw suggestionError;
-        const relatedProfessions = getRelatedProfessions(filter);
-        const alternatives = ((suggestions as NearbyArtisan[]) ?? [])
-          .filter((artisan) => artisan.id !== session?.user.id)
-          .sort((left, right) => {
-            const leftRank = relatedProfessions.indexOf(left.profession ?? '');
-            const rightRank = relatedProfessions.indexOf(right.profession ?? '');
-            const leftRelated = leftRank < 0 ? 1 : 0;
-            const rightRelated = rightRank < 0 ? 1 : 0;
-            return leftRelated - rightRelated || leftRank - rightRank || left.distance_m - right.distance_m;
-          });
-        setSuggestedArtisans(alternatives.slice(0, 8));
-      } else {
-        setSuggestedArtisans([]);
-      }
-    },
-    [filter, session?.user.id],
-  );
+      if (request !== requestId.current) return;
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const coords = await getCurrentCoords();
-      if (!coords) {
-        setArtisans([]);
-        setMe(null);
-        setError('Activez la localisation pour voir les artisans proches de vous.');
-        return;
-      }
-      meRef.current = coords;
-      setMe(coords);
-      await saveMyLocation(coords);
-      await fetchArtisans(coords);
+      const rows = (data as NearbyArtisan[] | null) ?? [];
+      setArtisans(rows);
+      setSelectedId((current) => (current && rows.some((artisan) => artisan.id === current) ? current : null));
     } catch (err) {
+      if (request !== requestId.current) return;
       setError(`Impossible de charger les artisans : ${errorMessage(err, 'erreur inconnue')}`);
+      setArtisans([]);
     } finally {
-      setLoading(false);
+      if (request === requestId.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
-  }, [fetchArtisans]);
+  }, [filter]);
 
   useEffect(() => {
-    // load fetches location and updates React state after its asynchronous work.
+    // load() updates state only after its asynchronous location and database requests.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    load();
+    void load();
   }, [load]);
 
-  // Temps réel : les artisans apparaissent / disparaissent selon leur position et leur disponibilité.
   useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const refresh = () => {
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => {
-        if (meRef.current) void fetchArtisans(meRef.current).catch(() => undefined);
-      }, 800);
-    };
+    if (!hasLocation) return;
     const channel = supabase
-      .channel('home-artisans')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'user_locations' }, refresh)
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'profiles' }, refresh)
-      .subscribe();
-    // L'état « en ligne » expire sans événement : rafraîchissement léger.
-    const interval = setInterval(refresh, 60000);
+      .channel('nearby-artisans-live')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'profiles',
+        filter: 'role=eq.artisan',
+      }, () => {
+        if (realtimeTimer.current) clearTimeout(realtimeTimer.current);
+        realtimeTimer.current = setTimeout(() => {
+          realtimeTimer.current = null;
+          void load(true);
+        }, 700);
+      })
+      .subscribe((status) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn('[home] Synchronisation des artisans indisponible:', status);
+        }
+      });
+
     return () => {
-      if (timer) clearTimeout(timer);
-      clearInterval(interval);
+      if (realtimeTimer.current) clearTimeout(realtimeTimer.current);
+      realtimeTimer.current = null;
       void supabase.removeChannel(channel);
     };
-  }, [fetchArtisans]);
+  }, [load, hasLocation]);
 
-  useEffect(() => {
-    if (!selectedId) return;
-    let cancelled = false;
-    supabase
-      .from('portfolio_items')
-      .select('image_url')
-      .eq('artisan_id', selectedId)
-      .order('created_at', { ascending: false })
-      .limit(12)
-      .then(({ data }) => {
-        if (!cancelled) {
-          setPortfolioData({ artisanId: selectedId, items: (data ?? []).map((r) => r.image_url as string) });
-        }
-      });
-    supabase
-      .from('reviews')
-      .select('id, client_name, rating, comment')
-      .eq('artisan_id', selectedId)
-      .order('created_at', { ascending: false })
-      .limit(5)
-      .then(({ data }) => {
-        if (!cancelled) {
-          setReviewsData({
-            artisanId: selectedId,
-            items: (data ?? []) as { id: string; client_name: string | null; rating: number; comment: string | null }[],
-          });
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedId]);
-
-  const requireLogin = () => {
-    if (session?.user.id) return false;
-    router.push('/(auth)/login');
-    return true;
-  };
-
-  const contact = async (a: NearbyArtisan) => {
-    if (requireLogin()) return;
-    setBusy(true);
-    const { data, error: err } = await supabase.rpc('start_direct_chat', { p_artisan_id: a.id });
-    setBusy(false);
-    if (err || !data) return Alert.alert('Chat indisponible', errorMessage(err, 'Réessayez plus tard.'));
-    router.push({ pathname: '/messages', params: { c: (data as { id: string }).id } });
-  };
-
-  const requestQuote = (a: NearbyArtisan) => {
-    if (requireLogin()) return;
-    router.push({
-      pathname: '/quotes',
-      params: { category: a.profession ?? '', title: `Demande pour ${a.full_name ?? 'l’artisan'}`, artisanId: a.id },
-    });
-  };
+  const selected = artisans.find((artisan) => artisan.id === selectedId) ?? null;
+  const firstName = profile?.full_name?.trim().split(/\s+/)[0];
 
   return (
-    <View style={styles.root}>
-      {loading ? (
-        <ActivityIndicator size="large" style={styles.flex} />
-      ) : me ? (
-        <ArtisanMap
-          fullScreen
-          center={me}
-          artisans={artisans.length > 0 ? artisans : suggestedArtisans}
-          userName={profile?.full_name}
-          userId={profile?.id}
-          userRole={profile?.role === 'artisan' ? 'Artisan' : 'Client'}
-          userAvatar={profile?.avatar_url}
-          userProfession={profile?.profession}
-          onSelect={setSelectedId}
-        />
+    <SafeAreaView style={styles.safe}>
+      {me ? (
+        <ArtisanMap center={me} artisans={artisans} onSelect={setSelectedId} fullScreen />
       ) : (
-        <TouchableOpacity style={styles.placeholder} onPress={load}>
-          <Ionicons name="location-outline" size={32} color="#007AFF" />
-          <Text style={styles.empty}>{error ?? 'Activez le GPS pour voir la carte.'} Touchez pour réessayer.</Text>
-        </TouchableOpacity>
-      )}
-
-      <SafeAreaView style={styles.top} edges={['top']} pointerEvents="box-none">
-        <View style={styles.header}>
-          <View style={styles.flex}>
-            <Text style={styles.title}>
-              {profile?.full_name ? `Bonjour ${profile.full_name.split(' ')[0]}` : 'Bonjour'}
-            </Text>
-            <Text style={styles.subtitle}>
-              {artisans.length} artisan{artisans.length > 1 ? 's' : ''} près de vous
-            </Text>
-          </View>
-          {profile?.role === 'artisan' && (
-            <TouchableOpacity style={styles.dashButton} onPress={() => router.push('/dashboard')}>
-              <Ionicons name="grid" size={16} color="#fff" />
-              <Text style={styles.dashButtonText}>Dashboard</Text>
+        <View style={styles.mapPlaceholder}>
+          <Ionicons name="map-outline" size={40} color="#1877F2" />
+          {loading ? (
+            <ActivityIndicator size="large" color="#1877F2" />
+          ) : (
+            <Text style={[styles.placeholderText, { color: theme.textSecondary }]}>{error ?? t('La carte sera affichée après la localisation.')}</Text>
+          )}
+          {!loading && (
+            <TouchableOpacity style={styles.retryButton} onPress={() => void load()}>
+              <Text style={styles.retryText}>{t('Réessayer')}</Text>
             </TouchableOpacity>
           )}
-          {session && <NotificationBell />}
         </View>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
-          {[null, ...PROFESSIONS].map((p) => (
-            <TouchableOpacity key={p ?? 'all'} style={[styles.chip, filter === p && styles.chipActive]} onPress={() => setFilter(p)}>
-              <Text style={[styles.chipText, filter === p && styles.chipTextActive]}>{p ?? 'Tous'}</Text>
+      )}
+
+      <View style={styles.overlay} pointerEvents="box-none">
+        <View style={styles.top}>
+          <View style={styles.heading}>
+            <Text style={styles.title}>{firstName ? `${t('Bonjour')} ${firstName}` : t('Artisans proches')}</Text>
+            <Text style={styles.subtitle}>{t('Des professionnels autour de vous')}</Text>
+          </View>
+          <TouchableOpacity
+            style={styles.iconButton}
+            onPress={() => router.push('/profile')}
+            accessibilityLabel="Ouvrir mon profil">
+            <Ionicons name="person-outline" size={21} color="#17202e" />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.iconButton}
+            onPress={() => {
+              setRefreshing(true);
+              void load(true);
+            }}
+            accessibilityLabel="Actualiser la carte">
+            {refreshing ? (
+              <ActivityIndicator color="#1877F2" />
+            ) : (
+              <Ionicons name="refresh-outline" size={21} color="#17202e" />
+            )}
+          </TouchableOpacity>
+        </View>
+
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.filters}>
+          {[null, ...PROFESSIONS].map((profession) => (
+            <TouchableOpacity
+              key={profession ?? 'all'}
+              style={[styles.filter, filter === profession && styles.filterActive]}
+              onPress={() => setFilter(profession)}>
+              <Text style={[styles.filterText, { color: filter === profession ? '#fff' : theme.text }, filter === profession && styles.filterTextActive]}>
+                {profession ?? t('Tous les métiers')}
+              </Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
-        {!!filter && artisans.length === 0 && !loading && (
-          <View style={styles.suggestionsCard}>
-            <Text style={styles.suggestionsTitle}>Aucun artisan « {filter} » près de vous</Text>
-            <Text style={styles.suggestionsText}>
-              Essayez une autre catégorie. Voici des artisans proches qui peuvent peut-être vous aider :
-            </Text>
-            {suggestedArtisans.length > 0 ? (
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.suggestionList}>
-                {suggestedArtisans.map((artisan) => (
-                  <TouchableOpacity
-                    key={artisan.id}
-                    style={styles.suggestionItem}
-                    onPress={() => setSelectedId(artisan.id)}>
-                    <Text style={styles.suggestionName} numberOfLines={1}>{artisan.full_name ?? 'Artisan'}</Text>
-                    <Text style={styles.suggestionMeta} numberOfLines={1}>
-                      {artisan.profession ?? 'Autre'} · {formatDistance(artisan.distance_m)}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            ) : (
-              <Text style={styles.suggestionsText}>Aucun autre artisan disponible dans votre zone pour le moment.</Text>
-            )}
+
+        {error && me && (
+          <View style={styles.errorBanner}>
+            <Text style={styles.errorText}>{error}</Text>
           </View>
         )}
-      </SafeAreaView>
 
-      {selectedProfile && (
-        <View style={styles.sheet}>
-          <TouchableOpacity style={styles.close} onPress={() => setSelectedId(null)} hitSlop={10}>
-            <Ionicons name="close" size={22} color="#666" />
-          </TouchableOpacity>
-          <ScrollView showsVerticalScrollIndicator={false}>
-            <View style={styles.sheetHeader}>
-              <View style={styles.avatar}>
-                {selectedProfile.avatar_url ? (
-                  <Image source={{ uri: selectedProfile.avatar_url }} style={styles.avatarImg} />
-                ) : (
-                  <Ionicons name="person" size={28} color="#007AFF" />
-                )}
+        <View style={styles.bottom}>
+          {selected ? (
+            <View style={[styles.selectedCard, { backgroundColor: theme.backgroundElement }]}>
+              <View style={styles.selectedIdentity}>
+                <View style={styles.avatar}>
+                  <Ionicons name="person" size={22} color="#1877F2" />
+                </View>
+                <View style={styles.flex}>
+                  <Text style={[styles.name, { color: theme.text }]}>{selected.full_name ?? t('Artisan')}</Text>
+                  <Text style={[styles.meta, { color: theme.textSecondary }]}>
+                    {[selected.profession, selected.city].filter(Boolean).join(' · ') || t('Professionnel')}
+                  </Text>
+                  {!!selected.description && (
+                    <Text style={[styles.description, { color: theme.textSecondary }]} numberOfLines={2}>{selected.description}</Text>
+                  )}
+                </View>
+                <View style={styles.distance}>
+                  <Ionicons name="location-outline" size={15} color={theme.accent} />
+                  <Text style={[styles.distanceText, { color: theme.accent }]}>{formatDistance(selected.distance_m)}</Text>
+                </View>
               </View>
+              <TouchableOpacity style={[styles.quoteButton, { backgroundColor: theme.accent }]} onPress={() => router.push('/quotes')}>
+                <Ionicons name="document-text-outline" size={17} color="#fff" />
+                <Text style={styles.quoteText}>{t('Demander un devis')}</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View style={[styles.listHeader, { backgroundColor: theme.backgroundElement }]}>
               <View style={styles.flex}>
-                <Text style={styles.name}>{selectedProfile.full_name ?? 'Artisan'}</Text>
-                <Text style={styles.meta}>{selectedProfile.profession ?? 'Artisan'}</Text>
-                <Text style={{ color: selectedProfile.is_online ? '#34C759' : '#999', fontSize: 12, fontWeight: '600' }}>
-                  {selectedProfile.is_online ? '● En ligne' : '○ Hors ligne'}
+              <Text style={[styles.listTitle, { color: theme.text }]}>{t('Artisans disponibles')}</Text>
+              <Text style={[styles.listSubtitle, { color: theme.textSecondary }]}>
+                {loading ? t('Recherche en cours…') : `${artisans.length} ${t(artisans.length === 1 ? 'résultat' : 'résultats')}`}
                 </Text>
               </View>
-              <Text style={styles.distance}>{formatDistance(selectedProfile.distance_m)}</Text>
-            </View>
-
-            <View style={styles.badges}>
-              <Text style={styles.badge}>⭐ {Number(selectedProfile.rating ?? 0).toFixed(1)}</Text>
-              <Text style={styles.badge}>{selectedProfile.city ?? 'Ville non renseignée'}</Text>
-              {!!selectedProfile.phone && (
-                <TouchableOpacity onPress={() => Linking.openURL(`tel:${selectedProfile.phone}`)}>
-                  <Text style={[styles.badge, styles.phone]}>📞 {selectedProfile.phone}</Text>
-                </TouchableOpacity>
+            {loading && <ActivityIndicator color={theme.accent} />}
+              {!loading && artisans.length === 0 && !error && (
+              <Text style={[styles.emptyText, { color: theme.textSecondary }]}>{t('Aucun artisan disponible à proximité.')}</Text>
               )}
-            </View>
-
-            {selectedProfile && <View style={styles.routeCard}>
-              <Text style={styles.routeTitle}>Distance depuis vous</Text>
-              <View style={styles.travelModes}>
-                {selectedProfile.id !== session?.user.id && travelModes.map((mode) => (
-                  <TouchableOpacity
-                    key={mode.id}
-                    style={[styles.travelMode, travelMode === mode.id && styles.travelModeActive]}
-                    onPress={() => setTravelMode(mode.id)}>
-                    <Ionicons name={mode.icon} size={16} color={travelMode === mode.id ? '#fff' : '#007AFF'} />
-                    <Text style={[styles.travelModeText, travelMode === mode.id && styles.travelModeTextActive]}>
-                      {mode.label}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-              <Text style={styles.routeDistance}>
-                {selectedProfile.id === session?.user.id
-                  ? 'Vous êtes ici, à votre position GPS.'
-                  : routeLoading
-                  ? 'Calcul de l’itinéraire…'
-                  : routeDistance !== null
-                    ? `${formatDistance(routeDistance)} · distance estimée par itinéraire`
-                    : routeUnavailable
-                      ? `${formatDistance(selectedProfile.distance_m)} à vol d’oiseau · itinéraire indisponible`
-                      : `${formatDistance(selectedProfile.distance_m)} à vol d’oiseau`}
-              </Text>
-            </View>}
-
-            {!!selectedProfile.description && <Text style={styles.desc}>{selectedProfile.description}</Text>}
-
-            {(selected || selectedOwnProfile) && portfolio.length > 0 && (
-              <>
-                <Text style={styles.section}>Réalisations</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.gallery}>
-                  {portfolio.map((uri) => (
-                    <Image key={uri} source={{ uri }} style={styles.work} />
+              {artisans.length > 0 && (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.artisanList}>
+                  {artisans.map((artisan) => (
+                    <TouchableOpacity
+                      key={artisan.id}
+                      style={styles.artisanChip}
+                      onPress={() => setSelectedId(artisan.id)}>
+                      <Text style={styles.artisanName} numberOfLines={1}>
+                        {artisan.full_name ?? t('Artisan')}
+                      </Text>
+                      <Text style={styles.artisanMeta} numberOfLines={1}>
+                        {artisan.profession ?? t('Professionnel')} · {formatDistance(artisan.distance_m)}
+                      </Text>
+                    </TouchableOpacity>
                   ))}
                 </ScrollView>
-              </>
-            )}
-
-            {(selected || selectedOwnProfile) && reviews.length > 0 && (
-              <>
-                <Text style={styles.section}>Avis ({reviews.length})</Text>
-                {reviews.map((r) => (
-                  <View key={r.id} style={styles.review}>
-                    <Text style={styles.reviewHead}>{r.client_name ?? 'Client'} · {'★'.repeat(r.rating)}{'☆'.repeat(5 - r.rating)}</Text>
-                    {!!r.comment && <Text style={styles.desc}>{r.comment}</Text>}
-                  </View>
-                ))}
-              </>
-            )}
-            {profile?.role === 'client' ||
-            (profile?.role === 'artisan' && selectedProfile.id !== session?.user.id) ? (
-              <>
-                <View style={styles.actions}>
-                  <TouchableOpacity style={[styles.btn, styles.btnPrimary]} onPress={() => contact(selectedProfile)} disabled={busy}>
-                    <Ionicons name="chatbubble" size={16} color="#fff" />
-                    <Text style={styles.btnPrimaryText}>Contacter</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={[styles.btn, styles.btnSecondary]} onPress={() => requestQuote(selectedProfile)} disabled={busy}>
-                    <Ionicons name="document-text-outline" size={16} color="#007AFF" />
-                    <Text style={styles.btnSecondaryText}>Demander un devis</Text>
-                  </TouchableOpacity>
-                </View>
-                <TouchableOpacity
-                  style={styles.exploit}
-                  onPress={() => router.push({ pathname: '/portfolio', params: { artisanId: selectedProfile.id } })}
-                  disabled={busy}>
-                  <Ionicons name="images-outline" size={17} color="#FF6B00" />
-                  <Text style={styles.exploitText}>Voir les réalisations</Text>
-                </TouchableOpacity>
-              </>
-            ) : (
-              <Text style={styles.ownProfileNote}>
-                {selectedProfile.id === session?.user.id
-                  ? 'C’est votre profil : ces actions ne sont pas disponibles sur votre propre compte.'
-                  : 'Connectez-vous comme client ou artisan pour contacter un artisan.'}
-              </Text>
-            )}
-          </ScrollView>
+              )}
+            </View>
+          )}
         </View>
-      )}
-    </View>
+      </View>
+    </SafeAreaView>
   );
 }
 
-const styles = themedStyles({
+const styles = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: '#e8eef5' },
+  overlay: { ...StyleSheet.absoluteFill, justifyContent: 'space-between' },
+  top: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, paddingTop: 8 },
+  heading: { flex: 1, backgroundColor: '#fff', borderRadius: 16, paddingHorizontal: 15, paddingVertical: 11, elevation: 5, shadowColor: '#101828', shadowOpacity: 0.12, shadowRadius: 10, shadowOffset: { width: 0, height: 3 } },
+  title: { color: '#101828', fontSize: 17, fontWeight: '800' },
+  subtitle: { color: '#667085', fontSize: 12, marginTop: 2 },
+  iconButton: { width: 43, height: 43, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff', elevation: 5 },
+  filters: { paddingHorizontal: 14, paddingTop: 10, paddingBottom: 8, gap: 8 },
+  filter: { paddingHorizontal: 13, paddingVertical: 9, borderRadius: 20, backgroundColor: '#fff', elevation: 3 },
+  filterActive: { backgroundColor: '#1877F2' },
+  filterText: { color: '#344054', fontSize: 12, fontWeight: '600' },
+  filterTextActive: { color: '#fff' },
+  bottom: { paddingHorizontal: 12, paddingBottom: 10 },
+  listHeader: { backgroundColor: '#fff', borderRadius: 18, padding: 14, gap: 8, elevation: 7, shadowColor: '#101828', shadowOpacity: 0.15, shadowRadius: 12, shadowOffset: { width: 0, height: 4 } },
+  listTitle: { color: '#101828', fontSize: 15, fontWeight: '800' },
+  listSubtitle: { color: '#667085', fontSize: 12, marginTop: 2 },
+  emptyText: { color: '#667085', fontSize: 13, paddingVertical: 8 },
+  artisanList: { gap: 8, paddingRight: 4 },
+  artisanChip: { width: 190, borderRadius: 12, borderWidth: 1, borderColor: '#eaecf0', padding: 10 },
+  artisanName: { color: '#101828', fontWeight: '700', fontSize: 13 },
+  artisanMeta: { color: '#667085', fontSize: 11, marginTop: 3 },
+  selectedCard: { backgroundColor: '#fff', borderRadius: 18, padding: 14, gap: 12, elevation: 7, shadowColor: '#101828', shadowOpacity: 0.15, shadowRadius: 12, shadowOffset: { width: 0, height: 4 } },
+  selectedIdentity: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  avatar: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: '#eaf2ff' },
   flex: { flex: 1 },
-  root: { flex: 1, backgroundColor: '#e8e8e8' },
-  placeholder: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 24 },
-  empty: { color: '#444', textAlign: 'center' },
-  top: { position: 'absolute', top: 0, left: 0, right: 0 },
-  header: { flexDirection: 'row', alignItems: 'center', gap: 10, marginHorizontal: 12, marginTop: 6, padding: 10, borderRadius: 14, backgroundColor: '#ffffffee' },
-  title: { fontSize: 18, fontWeight: 'bold', color: '#222' },
-  subtitle: { fontSize: 12, color: '#666' },
-  dashButton: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#007AFF', borderRadius: 18, paddingHorizontal: 12, paddingVertical: 8 },
-  dashButtonText: { color: '#fff', fontWeight: '600' },
-  chips: { paddingHorizontal: 12, paddingVertical: 8, gap: 8 },
-  suggestionsCard: { marginHorizontal: 12, marginTop: 2, padding: 12, borderRadius: 14, gap: 7, backgroundColor: '#ffffffee' },
-  suggestionsTitle: { color: '#222', fontWeight: '700', fontSize: 13 },
-  suggestionsText: { color: '#555', fontSize: 12, lineHeight: 17 },
-  suggestionList: { gap: 8, paddingVertical: 2 },
-  suggestionItem: { maxWidth: 190, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 10, backgroundColor: '#f2f7ff', borderWidth: 1, borderColor: '#d8e7ff' },
-  suggestionName: { color: '#222', fontWeight: '700', fontSize: 12 },
-  suggestionMeta: { color: '#555', fontSize: 11, marginTop: 3 },
-  chip: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 18, backgroundColor: '#ffffffee', borderWidth: 1, borderColor: '#ddd' },
-  chipActive: { backgroundColor: '#007AFF', borderColor: '#007AFF' },
-  chipText: { color: '#333', fontWeight: '600', fontSize: 13 },
-  chipTextActive: { color: '#fff' },
-  sheet: { position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '62%', backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 16, shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 10, elevation: 12 },
-  close: { position: 'absolute', top: 10, right: 12, zIndex: 2 },
-  sheetHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingRight: 28 },
-  avatar: { width: 64, height: 64, borderRadius: 32, backgroundColor: '#E6F0FF', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
-  avatarImg: { width: 64, height: 64 },
-  name: { fontSize: 18, fontWeight: 'bold', color: '#222' },
-  meta: { fontSize: 14, color: '#666' },
-  distance: { fontSize: 12, color: '#007AFF', fontWeight: '600' },
-  badges: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
-  badge: { backgroundColor: '#f2f2f2', color: '#333', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4, overflow: 'hidden', fontSize: 13 },
-  phone: { color: '#007AFF' },
-  routeCard: { marginTop: 12, padding: 12, borderRadius: 12, backgroundColor: '#f2f7ff', gap: 8 },
-  routeTitle: { fontSize: 13, fontWeight: '700', color: '#222' },
-  travelModes: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  travelMode: { flexDirection: 'row', alignItems: 'center', gap: 5, borderWidth: 1, borderColor: '#cbdcf5', borderRadius: 16, paddingHorizontal: 10, paddingVertical: 6 },
-  travelModeActive: { backgroundColor: '#007AFF', borderColor: '#007AFF' },
-  travelModeText: { color: '#007AFF', fontSize: 12, fontWeight: '600' },
-  travelModeTextActive: { color: '#fff' },
-  routeDistance: { color: '#555', fontSize: 12 },
-  desc: { color: '#444', marginTop: 10, lineHeight: 20 },
-  section: { fontWeight: '700', color: '#222', marginTop: 12, marginBottom: 6 },
-  review: { backgroundColor: '#f7f7f7', borderRadius: 10, padding: 10, marginBottom: 6 },
-  reviewHead: { fontWeight: '600', color: '#222' },
-  gallery: { gap: 8 },
-  work: { width: 110, height: 80, borderRadius: 10, backgroundColor: '#eee' },
-  actions: { flexDirection: 'row', gap: 10, marginTop: 14 },
-  btn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 12, paddingVertical: 12 },
-  btnPrimary: { backgroundColor: '#007AFF' },
-  btnPrimaryText: { color: '#fff', fontWeight: '700' },
-  btnSecondary: { borderWidth: 1, borderColor: '#007AFF' },
-  btnSecondaryText: { color: '#007AFF', fontWeight: '700' },
-  exploit: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 12 },
-  exploitText: { color: '#FF6B00', fontWeight: '600' },
-  ownProfileNote: { color: '#666', textAlign: 'center', fontSize: 13, paddingVertical: 12 },
+  name: { color: '#101828', fontSize: 15, fontWeight: '800' },
+  meta: { color: '#667085', fontSize: 12, marginTop: 2 },
+  description: { color: '#475467', fontSize: 12, marginTop: 4 },
+  distance: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  distanceText: { color: '#1877F2', fontSize: 12, fontWeight: '700' },
+  quoteButton: { height: 42, borderRadius: 10, backgroundColor: '#1877F2', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  quoteText: { color: '#fff', fontSize: 13, fontWeight: '700' },
+  mapPlaceholder: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center', gap: 12, padding: 32, backgroundColor: '#eef3f8' },
+  placeholderText: { color: '#475467', textAlign: 'center', fontSize: 14, lineHeight: 20 },
+  retryButton: { backgroundColor: '#1877F2', borderRadius: 10, paddingHorizontal: 18, paddingVertical: 10 },
+  retryText: { color: '#fff', fontWeight: '700' },
+  errorBanner: { marginHorizontal: 14, borderRadius: 10, padding: 10, backgroundColor: '#fff4ed' },
+  errorText: { color: '#b54708', fontSize: 12 },
 });

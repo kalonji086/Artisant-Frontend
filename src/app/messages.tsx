@@ -1,12 +1,10 @@
-import { useSettings } from '@/lib/settings-context';
-import { themedStyles } from '@/lib/themed-styles';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
-  Keyboard,
   KeyboardAvoidingView,
   Platform,
+  StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
@@ -17,9 +15,9 @@ import { useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase-client';
 import { useAuth } from '@/lib/auth-context';
-import { useResponsive } from '@/lib/responsive';
 import { errorMessage } from '@/lib/errors';
-import { INPUT_PROPS } from '@/lib/input-colors';
+import { useTheme } from '@/hooks/use-theme';
+import { useTranslate, useUserPreferences } from '@/lib/user-preferences-context';
 
 const SUPPORT_NAME = 'Artisant';
 
@@ -39,53 +37,27 @@ type Message = {
   sender_is_admin: boolean;
   content: string;
   created_at: string;
-  read_at: string | null;
 };
 
 export default function MessagesScreen() {
-  useSettings();
   const { session } = useAuth();
-  const responsive = useResponsive();
+  const theme = useTheme();
+  const t = useTranslate();
+  const { preferences } = useUserPreferences();
   const userId = session?.user.id;
   const params = useLocalSearchParams<{ c?: string }>();
   const [active, setActive] = useState<string | null>(null);
   const [convs, setConvs] = useState<Conversation[]>([]);
   const [names, setNames] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
-  const [messageData, setMessageData] = useState<{ conversationId: string; items: Message[] } | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const listRef = useRef<FlatList<Message>>(null);
-  const [presence, setPresence] = useState<{ conversationId: string; online: boolean } | null>(null);
-  const messages = messageData?.conversationId === active ? messageData.items : [];
-  const otherOnline = presence?.conversationId === active && presence.online;
 
   useEffect(() => {
-    const sub = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow', () => {
-      setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 50);
-    });
-    return () => sub.remove();
-  }, []);
-
-  useEffect(() => {
-    if (!active || !userId) return;
-    const ch = supabase.channel(`presence-${active}`, { config: { presence: { key: userId } } });
-    ch.on('presence', { event: 'sync' }, () => {
-      setPresence({
-        conversationId: active,
-        online: Object.keys(ch.presenceState()).some((k) => k !== userId),
-      });
-    }).subscribe((status) => {
-      if (status === 'SUBSCRIBED') void ch.track({ at: Date.now() });
-    });
-    return () => {
-      void supabase.removeChannel(ch);
-    };
-  }, [active, userId]);
-
-  useEffect(() => {
-    // Keep an already-open screen in sync when navigation supplies a new conversation.
+    // Keep the active conversation synchronized with navigation parameters.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (params.c) setActive(params.c);
   }, [params.c]);
@@ -110,7 +82,7 @@ export default function MessagesScreen() {
   }, [userId]);
 
   useEffect(() => {
-    // Conversation data is fetched asynchronously; the callback updates state on completion.
+    // Fetching conversations updates state after the Supabase request completes.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     loadConvs();
     if (!userId) return;
@@ -126,30 +98,26 @@ export default function MessagesScreen() {
   const loadMessages = useCallback(async (id: string) => {
     const { data, error: err } = await supabase
       .from('chat_messages')
-      .select('id, conversation_id, sender_id, sender_is_admin, content, created_at, read_at')
+      .select('id, conversation_id, sender_id, sender_is_admin, content, created_at')
       .eq('conversation_id', id)
       .order('created_at', { ascending: true })
       .limit(500);
     if (err) setError(errorMessage(err));
-    setMessageData({ conversationId: id, items: (data ?? []) as Message[] });
+    setMessages((data ?? []) as Message[]);
     void supabase.rpc('mark_chat_read', { p_conversation_id: id });
   }, []);
 
   useEffect(() => {
     if (!active) return;
-    // The displayed list is keyed by conversationId, so old messages disappear immediately.
+    // Clear the previous conversation before loading the newly selected one.
     // eslint-disable-next-line react-hooks/set-state-in-effect
+    setMessages([]);
     loadMessages(active);
     const ch = supabase
       .channel(`chat-msgs-${active}`)
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'chat_messages', filter: `conversation_id=eq.${active}` },
-        () => loadMessages(active),
-      )
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'chat_messages', filter: `conversation_id=eq.${active}` },
         () => loadMessages(active),
       )
       .subscribe();
@@ -184,49 +152,46 @@ export default function MessagesScreen() {
   if (active) {
     const conv = convs.find((c) => c.id === active);
     return (
-      <SafeAreaView style={styles.safe}>
-        <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={0}>
-          <View style={styles.topBar}>
+      <SafeAreaView style={[styles.safe, { backgroundColor: theme.background }]}>
+        <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={[styles.topBar, { backgroundColor: theme.backgroundElement, borderBottomColor: theme.backgroundSelected }]}>
             <TouchableOpacity onPress={() => setActive(null)} hitSlop={10}>
-              <Ionicons name="chevron-back" size={26} color="#007AFF" />
+              <Ionicons name="chevron-back" size={26} color={theme.accent} />
             </TouchableOpacity>
-            <Text style={styles.topTitle}>{conv ? titleOf(conv) : 'Discussion'}</Text>
-            <Text style={{ color: otherOnline ? '#34C759' : '#999', fontSize: 12 }}>{otherOnline ? '● En ligne' : '○ Hors ligne'}</Text>
+            <Text style={[styles.topTitle, { color: theme.text }]}>{conv ? titleOf(conv) : t('Discussion')}</Text>
           </View>
           <FlatList
             ref={listRef}
             data={messages}
             keyExtractor={(m) => m.id}
-            contentContainerStyle={[styles.msgList, responsive.contentFrame]}
+            contentContainerStyle={styles.msgList}
             onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
-            ListEmptyComponent={<Text style={styles.empty}>Aucun message. Écrivez le premier !</Text>}
+            ListEmptyComponent={<Text style={[styles.empty, { color: theme.textSecondary }]}>{t('Aucun message. Écrivez le premier !')}</Text>}
             renderItem={({ item }) => {
               const mine = item.sender_id === userId;
               return (
-                <View style={[styles.bubble, mine ? styles.mine : styles.theirs]}>
-                  {!mine && item.sender_is_admin && <Text style={styles.sender}>{SUPPORT_NAME}</Text>}
-                  <Text style={mine ? styles.mineText : styles.theirText}>{item.content}</Text>
-                  <Text style={[styles.time, mine && styles.timeMine]}>
-                    {new Date(item.created_at).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
-                    {mine ? (item.read_at ? '  ✓✓ Lu' : '  ✓ Envoyé') : ''}
+                <View style={[styles.bubble, mine ? [styles.mine, { backgroundColor: theme.accent }] : [styles.theirs, { backgroundColor: theme.backgroundElement }]]}>
+                  {!mine && item.sender_is_admin && <Text style={styles.sender}>{t(SUPPORT_NAME)}</Text>}
+                  <Text style={mine ? styles.mineText : [styles.theirText, { color: theme.text }]}>{item.content}</Text>
+                  <Text style={[styles.time, mine && styles.timeMine, !mine && { color: theme.textSecondary }]}>
+                    {new Date(item.created_at).toLocaleTimeString(preferences.language === 'en' ? 'en-US' : 'fr-FR', { hour: '2-digit', minute: '2-digit' })}
                   </Text>
                 </View>
               );
             }}
           />
           {!!error && <Text style={styles.error}>{error}</Text>}
-          <View style={styles.composer}>
+          <View style={[styles.composer, { backgroundColor: theme.backgroundElement, borderTopColor: theme.backgroundSelected }]}>
             <TextInput
-              {...INPUT_PROPS}
-              style={styles.input}
-              placeholder="Votre message"
-              placeholderTextColor="#999"
+              style={[styles.input, { backgroundColor: theme.background, color: theme.text }]}
+              placeholder={t('Votre message')}
+              placeholderTextColor={theme.textSecondary}
               value={text}
               onChangeText={setText}
               multiline
               maxLength={2000}
             />
-            <TouchableOpacity style={[styles.sendBtn, (!text.trim() || sending) && styles.disabled]} onPress={send} disabled={!text.trim() || sending}>
+            <TouchableOpacity style={[styles.sendBtn, { backgroundColor: theme.accent }, (!text.trim() || sending) && styles.disabled]} onPress={send} disabled={!text.trim() || sending}>
               {sending ? <ActivityIndicator color="#fff" /> : <Ionicons name="send" size={18} color="#fff" />}
             </TouchableOpacity>
           </View>
@@ -237,8 +202,8 @@ export default function MessagesScreen() {
 
   const hasSupport = convs.some((c) => c.kind === 'support');
   return (
-    <SafeAreaView style={styles.safe}>
-      <Text style={styles.heading}>Messages</Text>
+    <SafeAreaView style={[styles.safe, { backgroundColor: theme.background }]}>
+      <Text style={[styles.heading, { color: theme.text }]}>{t('Messages')}</Text>
       {!!error && <Text style={styles.error}>{error}</Text>}
       {loading ? (
         <ActivityIndicator style={styles.flex} size="large" />
@@ -246,7 +211,7 @@ export default function MessagesScreen() {
         <FlatList
           data={convs}
           keyExtractor={(c) => c.id}
-          contentContainerStyle={[styles.convList, { paddingHorizontal: responsive.gutter }, responsive.contentFrame]}
+          contentContainerStyle={styles.convList}
           ListHeaderComponent={
             !hasSupport ? (
               <TouchableOpacity style={styles.convRow} onPress={openSupport}>
@@ -255,24 +220,24 @@ export default function MessagesScreen() {
                 </View>
                 <View style={styles.flex}>
                   <Text style={styles.convName}>{SUPPORT_NAME}</Text>
-                  <Text style={styles.convLast}>Contacter l’équipe support</Text>
+                  <Text style={styles.convLast}>{t('Contacter l’équipe support')}</Text>
                 </View>
               </TouchableOpacity>
             ) : null
           }
-          ListEmptyComponent={hasSupport ? <Text style={styles.empty}>Aucune discussion.</Text> : null}
+          ListEmptyComponent={hasSupport ? <Text style={[styles.empty, { color: theme.textSecondary }]}>{t('Aucune discussion.')}</Text> : null}
           renderItem={({ item }) => (
-            <TouchableOpacity style={styles.convRow} onPress={() => setActive(item.id)}>
-              <View style={[styles.avatar, item.kind === 'support' && styles.avatarSupport]}>
-                <Ionicons name={item.kind === 'support' ? 'headset' : 'person'} size={22} color={item.kind === 'support' ? '#fff' : '#007AFF'} />
+            <TouchableOpacity style={[styles.convRow, { backgroundColor: theme.backgroundElement }]} onPress={() => setActive(item.id)}>
+              <View style={[styles.avatar, { backgroundColor: item.kind === 'support' ? '#FF6B00' : `${theme.accent}22` }]}>
+                <Ionicons name={item.kind === 'support' ? 'headset' : 'person'} size={22} color={item.kind === 'support' ? '#fff' : theme.accent} />
               </View>
               <View style={styles.flex}>
-                <Text style={styles.convName}>{titleOf(item)}</Text>
-                <Text style={styles.convLast} numberOfLines={1}>
+                <Text style={[styles.convName, { color: theme.text }]}>{t(titleOf(item))}</Text>
+                <Text style={[styles.convLast, { color: theme.textSecondary }]} numberOfLines={1}>
                   {item.last_message ?? 'Aucun message'}
                 </Text>
               </View>
-              <Text style={styles.time}>{new Date(item.last_message_at).toLocaleDateString('fr-FR')}</Text>
+              <Text style={[styles.time, { color: theme.textSecondary }]}>{new Date(item.last_message_at).toLocaleDateString(preferences.language === 'en' ? 'en-US' : 'fr-FR')}</Text>
             </TouchableOpacity>
           )}
         />
@@ -281,7 +246,7 @@ export default function MessagesScreen() {
   );
 }
 
-const styles = themedStyles({
+const styles = StyleSheet.create({
   flex: { flex: 1 },
   safe: { flex: 1, backgroundColor: '#f5f5f5' },
   heading: { fontSize: 24, fontWeight: 'bold', color: '#222', padding: 16 },

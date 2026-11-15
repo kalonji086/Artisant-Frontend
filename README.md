@@ -25,26 +25,6 @@ In the output, you'll find options to open the app in a
 
 You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
 
-## Mises à jour de l’application (OTA)
-
-Les versions publiées sur le canal `production` vérifient les mises à jour EAS au démarrage et lorsque l’application revient au premier plan. Une mise à jour JavaScript compatible se télécharge en arrière-plan, sans interrompre la session, puis s’applique au prochain lancement complet de l’application.
-
-Pour publier une mise à jour de contenu ou de code JavaScript sur la production :
-
-```bash
-npx eas-cli update --channel production --message "Description de la mise à jour" --environment production
-```
-
-Le canal `preview` sert aux builds de test. Testez-y une mise à jour avant de la publier sur `production` :
-
-```bash
-npx eas-cli update --channel preview --message "Test de la mise à jour" --environment preview
-```
-
-**Première activation :** EAS Update nécessite `expo-updates` dans le binaire installé. Après cette configuration, créez et distribuez une nouvelle build via les boutiques (ou votre canal de distribution interne). Les personnes qui utilisent encore une ancienne build sans EAS Update doivent installer cette build une fois ; les mises à jour OTA fonctionneront ensuite.
-
-Les changements qui nécessitent du code natif — par exemple l’ajout d’un module natif, une permission ou une configuration Android/iOS — requièrent toujours une nouvelle build. L’empreinte (`runtimeVersion: fingerprint`) empêche de distribuer une mise à jour OTA à un binaire natif incompatible.
-
 ## Get a fresh project
 
 When you're ready, run:
