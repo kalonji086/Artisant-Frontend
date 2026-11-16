@@ -140,10 +140,9 @@ export default function ResetPasswordScreen() {
       } catch (storageError) {
         console.warn('[auth] Suppression des identifiants mémorisés impossible:', storageError);
       }
-      await supabase.auth.signOut();
-      Alert.alert('Mot de passe modifié', 'Vous pouvez maintenant vous connecter avec votre nouveau mot de passe.', [
-        { text: 'Se connecter', onPress: () => router.replace('/(auth)/login') },
-      ]);
+      const { error: signOutError } = await supabase.auth.signOut({ scope: 'local' });
+      if (signOutError) throw signOutError;
+      router.replace('/(auth)/login');
     } catch (error) {
       Alert.alert(
         'Modification impossible',

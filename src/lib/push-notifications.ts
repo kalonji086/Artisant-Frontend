@@ -20,7 +20,10 @@ Notifications.setNotificationHandler({
   }),
 });
 
-export async function registerPushToken(userId: string) {
+export async function registerPushToken(
+  userId: string,
+  { requestPermission = true }: { requestPermission?: boolean } = {}
+) {
   if (Platform.OS === 'web' || !Device.isDevice) {
     return { granted: false, canAskAgain: false };
   }
@@ -36,7 +39,7 @@ export async function registerPushToken(userId: string) {
   }
 
   let permission = await Notifications.getPermissionsAsync();
-  if (!permission.granted && permission.canAskAgain) {
+  if (!permission.granted && permission.canAskAgain && requestPermission) {
     permission = await Notifications.requestPermissionsAsync();
   }
   if (!permission.granted) {
@@ -47,6 +50,7 @@ export async function registerPushToken(userId: string) {
   if (!projectId) throw new Error('Identifiant de projet Expo introuvable.');
 
   const token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
+  const previousToken = await AsyncStorage.getItem(tokenStorageKey(userId));
   const { data, error } = await supabase
     .from('push_devices')
     .upsert({
@@ -60,6 +64,14 @@ export async function registerPushToken(userId: string) {
 
   if (error) throw error;
   if (!data) throw new Error('Le jeton push n’a pas été enregistré pour cet appareil.');
+  if (previousToken && previousToken !== token) {
+    const { error: deleteError } = await supabase
+      .from('push_devices')
+      .delete()
+      .eq('user_id', userId)
+      .eq('expo_push_token', previousToken);
+    if (deleteError) throw deleteError;
+  }
   await AsyncStorage.setItem(tokenStorageKey(userId), token);
   return { granted: true, canAskAgain: permission.canAskAgain };
 }

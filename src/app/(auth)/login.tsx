@@ -7,6 +7,7 @@ import {
   Alert,
   ActivityIndicator,
   KeyboardAvoidingView,
+  Linking,
   Image,
   ImageBackground,
   ScrollView,
@@ -63,6 +64,7 @@ export function AuthScreen({ initialMode }: { initialMode: Mode }) {
   const { session } = useAuth();
   const isSignup = initialMode === 'signup';
   const [role, setRole] = useState<Role>('client');
+  const [rolePickerOpen, setRolePickerOpen] = useState(false);
   const [step, setStep] = useState(0);
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -119,10 +121,19 @@ export function AuthScreen({ initialMode }: { initialMode: Mode }) {
 
   const chooseAvatar = async () => {
     try {
-      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!permission.granted) {
-        Alert.alert('Accès aux photos refusé', 'Autorisez l’accès aux photos pour choisir une image de profil.');
-        return;
+      if (Platform.OS !== 'android') {
+        const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (!permission.granted) {
+          Alert.alert(
+            'Accès aux photos refusé',
+            'Autorisez l’accès aux photos dans les paramètres pour choisir une image de profil.',
+            [
+              { text: 'Annuler', style: 'cancel' },
+              { text: 'Paramètres', onPress: () => void Linking.openSettings() },
+            ]
+          );
+          return;
+        }
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
@@ -299,7 +310,7 @@ export function AuthScreen({ initialMode }: { initialMode: Mode }) {
       style={styles.background}>
       <View style={styles.scrim} />
       <SafeAreaView style={styles.safe}>
-        <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
           <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           <View style={styles.hero}>
             <AppLogo size={72} />
@@ -311,17 +322,48 @@ export function AuthScreen({ initialMode }: { initialMode: Mode }) {
           {isSignup && step === 0 && (
             <>
               <Text style={styles.sectionLabel}>Je suis</Text>
-              <Segmented
-                options={[
-                  { value: 'client', label: 'Client' },
-                  { value: 'artisan', label: 'Artisan' },
-                ]}
-                value={role}
-                onChange={(v) => {
-                  setRole(v as Role);
-                  setAccepted(false);
-                }}
-              />
+              <View style={styles.roleSelector}>
+                <TouchableOpacity
+                  style={styles.roleSelectButton}
+                  onPress={() => setRolePickerOpen((open) => !open)}
+                  accessibilityRole="button"
+                  accessibilityState={{ expanded: rolePickerOpen }}>
+                  <View style={[styles.roleIcon, role === 'artisan' && styles.roleIconArtisan]}>
+                    <Ionicons name={role === 'artisan' ? 'construct-outline' : 'person-outline'} size={19} color="#1877F2" />
+                  </View>
+                  <View style={styles.roleSelectCopy}>
+                    <Text style={styles.roleSelectLabel}>{role === 'artisan' ? 'Artisan' : 'Client'}</Text>
+                    <Text style={styles.roleSelectHint}>Touchez pour changer de profil</Text>
+                  </View>
+                  <Ionicons name={rolePickerOpen ? 'chevron-up' : 'chevron-down'} size={19} color="#667085" />
+                </TouchableOpacity>
+                {rolePickerOpen && (
+                  <View style={styles.roleOptions}>
+                    {[
+                      { value: 'client' as const, label: 'Client', description: 'Je recherche un professionnel', icon: 'person-outline' as const },
+                      { value: 'artisan' as const, label: 'Artisan', description: 'Je propose mes services', icon: 'construct-outline' as const },
+                    ].map((option) => (
+                      <TouchableOpacity
+                        key={option.value}
+                        style={[styles.roleOption, role === option.value && styles.roleOptionSelected]}
+                        onPress={() => {
+                          setRole(option.value);
+                          setRolePickerOpen(false);
+                          setAccepted(false);
+                        }}
+                        accessibilityRole="radio"
+                        accessibilityState={{ selected: role === option.value }}>
+                        <Ionicons name={option.icon} size={19} color={role === option.value ? '#1877F2' : '#667085'} />
+                        <View style={styles.roleOptionCopy}>
+                          <Text style={[styles.roleOptionLabel, role === option.value && styles.roleOptionLabelSelected]}>{option.label}</Text>
+                          <Text style={styles.roleOptionDescription}>{option.description}</Text>
+                        </View>
+                        {role === option.value && <Ionicons name="checkmark-circle" size={19} color="#1877F2" />}
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+              </View>
             </>
           )}
 
@@ -537,6 +579,16 @@ export function AuthScreen({ initialMode }: { initialMode: Mode }) {
             </Text>
           </TouchableOpacity>
 
+          {!isSignup && (
+            <TouchableOpacity
+              style={styles.helpLink}
+              onPress={() => router.push('/(auth)/help')}
+              accessibilityRole="button">
+              <Ionicons name="help-circle-outline" size={18} color="#1877F2" />
+              <Text style={styles.helpLinkText}>Centre d’aide</Text>
+            </TouchableOpacity>
+          )}
+
           <View style={styles.footer}>
             <Text style={styles.footerLink} onPress={() => router.push('/(auth)/legal/privacy')}>Politique de confidentialité</Text>
             <Text style={styles.footerSep}>•</Text>
@@ -567,12 +619,12 @@ function Segmented(props: {
 }) {
   return (
     <View style={styles.segmented}>
-      {props.options.map((o) => (
+      {props.options.map((option) => (
         <TouchableOpacity
-          key={o.value}
-          style={[styles.segment, props.value === o.value && styles.segmentActive]}
-          onPress={() => props.onChange(o.value)}>
-          <Text style={[styles.segmentText, props.value === o.value && styles.segmentTextActive]}>{o.label}</Text>
+          key={option.value}
+          style={[styles.segment, props.value === option.value && styles.segmentActive]}
+          onPress={() => props.onChange(option.value)}>
+          <Text style={[styles.segmentText, props.value === option.value && styles.segmentTextActive]}>{option.label}</Text>
         </TouchableOpacity>
       ))}
     </View>
@@ -609,6 +661,20 @@ const styles = StyleSheet.create({
   photoButtonText: { color: '#1877F2', fontSize: 12, fontWeight: '700' },
   multiline: { minHeight: 80, textAlignVertical: 'top' },
   eye: { position: 'absolute', right: 13, top: 13 },
+  roleSelector: { borderWidth: 1, borderColor: '#d0d5dd', borderRadius: 11, backgroundColor: '#f8fafc', overflow: 'hidden' },
+  roleSelectButton: { minHeight: 62, flexDirection: 'row', alignItems: 'center', gap: 11, paddingHorizontal: 12, paddingVertical: 9 },
+  roleIcon: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: '#eaf2ff' },
+  roleIconArtisan: { backgroundColor: '#eaf2ff' },
+  roleSelectCopy: { flex: 1, gap: 2 },
+  roleSelectLabel: { color: '#101828', fontSize: 15, fontWeight: '700' },
+  roleSelectHint: { color: '#667085', fontSize: 11 },
+  roleOptions: { borderTopWidth: 1, borderTopColor: '#e4e7ec', padding: 6, gap: 5 },
+  roleOption: { minHeight: 58, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 9, paddingVertical: 7, borderRadius: 8 },
+  roleOptionSelected: { backgroundColor: '#eff6ff' },
+  roleOptionCopy: { flex: 1, gap: 2 },
+  roleOptionLabel: { color: '#344054', fontSize: 13, fontWeight: '700' },
+  roleOptionLabelSelected: { color: '#1877F2' },
+  roleOptionDescription: { color: '#667085', fontSize: 11 },
   segmented: { flexDirection: 'row', backgroundColor: '#f2f4f7', borderRadius: 10, padding: 3 },
   segment: { flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center' },
   segmentActive: { backgroundColor: '#1877F2' },
@@ -643,6 +709,8 @@ const styles = StyleSheet.create({
   submitText: { color: '#fff', fontSize: 16, fontWeight: '600' },
   accountButton: { minHeight: 46, borderWidth: 1, borderColor: '#1877F2', borderRadius: 10, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 },
   accountButtonText: { color: '#1877F2', fontSize: 15, fontWeight: '700', textAlign: 'center' },
+  helpLink: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 5 },
+  helpLinkText: { color: '#1877F2', fontSize: 13, fontWeight: '700', textDecorationLine: 'underline' },
   footer: { flexDirection: 'row', justifyContent: 'center', flexWrap: 'wrap', gap: 8, marginTop: 10 },
   footerLink: { fontSize: 12, color: '#475467', textDecorationLine: 'underline' },
   footerSep: { fontSize: 12, color: '#98a2b3' },

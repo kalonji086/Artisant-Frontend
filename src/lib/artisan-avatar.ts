@@ -38,7 +38,8 @@ export async function uploadArtisanAvatar(userId: string, photo: ArtisanPhoto): 
     .upload(path, file, { contentType: mimeType, upsert: true, cacheControl: '3600' });
   if (uploadError) throw uploadError;
 
-  const avatarUrl = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(path).data.publicUrl;
+  const publicUrl = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(path).data.publicUrl;
+  const avatarUrl = `${publicUrl}${publicUrl.includes('?') ? '&' : '?'}v=${Date.now()}`;
   const { data, error: profileError } = await supabase
     .from('profiles')
     .update({ avatar_url: avatarUrl })

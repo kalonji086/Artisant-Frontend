@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import * as Location from 'expo-location';
 import { useAuth } from '@/lib/auth-context';
-import { saveMyLocation } from '@/lib/location';
+import { requestForegroundLocationPermission, saveMyLocation } from '@/lib/location';
 
 const MIN_INTERVAL_MS = 60_000;
 const MIN_DISTANCE_M = 100;
@@ -20,8 +20,8 @@ export function LocationTracker() {
 
     (async () => {
       try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== 'granted' || cancelled) return;
+        const permissionGranted = await requestForegroundLocationPermission();
+        if (!permissionGranted || cancelled) return;
         const sub = await Location.watchPositionAsync(
           {
             accuracy: Location.Accuracy.Balanced,

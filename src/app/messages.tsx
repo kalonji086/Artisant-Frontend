@@ -153,7 +153,10 @@ export default function MessagesScreen() {
     const conv = convs.find((c) => c.id === active);
     return (
       <SafeAreaView style={[styles.safe, { backgroundColor: theme.background }]}>
-        <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <KeyboardAvoidingView
+          style={styles.flex}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={0}>
           <View style={[styles.topBar, { backgroundColor: theme.backgroundElement, borderBottomColor: theme.backgroundSelected }]}>
             <TouchableOpacity onPress={() => setActive(null)} hitSlop={10}>
               <Ionicons name="chevron-back" size={26} color={theme.accent} />
@@ -165,6 +168,7 @@ export default function MessagesScreen() {
             data={messages}
             keyExtractor={(m) => m.id}
             contentContainerStyle={styles.msgList}
+            keyboardShouldPersistTaps="handled"
             onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
             ListEmptyComponent={<Text style={[styles.empty, { color: theme.textSecondary }]}>{t('Aucun message. Écrivez le premier !')}</Text>}
             renderItem={({ item }) => {
@@ -183,15 +187,27 @@ export default function MessagesScreen() {
           {!!error && <Text style={styles.error}>{error}</Text>}
           <View style={[styles.composer, { backgroundColor: theme.backgroundElement, borderTopColor: theme.backgroundSelected }]}>
             <TextInput
-              style={[styles.input, { backgroundColor: theme.background, color: theme.text }]}
+              style={[
+                styles.input,
+                {
+                  backgroundColor: theme.background,
+                  borderColor: theme.backgroundSelected,
+                  color: theme.text,
+                },
+              ]}
               placeholder={t('Votre message')}
               placeholderTextColor={theme.textSecondary}
               value={text}
               onChangeText={setText}
               multiline
               maxLength={2000}
+              textAlignVertical="top"
             />
-            <TouchableOpacity style={[styles.sendBtn, { backgroundColor: theme.accent }, (!text.trim() || sending) && styles.disabled]} onPress={send} disabled={!text.trim() || sending}>
+            <TouchableOpacity
+              style={[styles.sendBtn, { backgroundColor: theme.accent }, (!text.trim() || sending) && styles.disabled]}
+              onPress={send}
+              disabled={!text.trim() || sending}
+              accessibilityLabel={t('Envoyer')}>
               {sending ? <ActivityIndicator color="#fff" /> : <Ionicons name="send" size={18} color="#fff" />}
             </TouchableOpacity>
           </View>
@@ -269,8 +285,8 @@ const styles = StyleSheet.create({
   time: { fontSize: 11, color: '#999', marginTop: 3 },
   timeMine: { color: '#dbe9ff', alignSelf: 'flex-end' },
   error: { color: '#FF3B30', paddingHorizontal: 16, paddingVertical: 4 },
-  composer: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, padding: 10, backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: '#eee' },
-  input: { flex: 1, maxHeight: 110, backgroundColor: '#f2f2f2', borderRadius: 18, paddingHorizontal: 14, paddingVertical: 8, fontSize: 15, color: '#222' },
-  sendBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#007AFF', alignItems: 'center', justifyContent: 'center' },
+  composer: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, paddingHorizontal: 12, paddingVertical: 9, backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: '#eee' },
+  input: { flex: 1, minHeight: 44, maxHeight: 136, borderWidth: 1, borderRadius: 16, paddingHorizontal: 14, paddingTop: 11, paddingBottom: 11, fontSize: 15, lineHeight: 20, color: '#222' },
+  sendBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#007AFF', alignItems: 'center', justifyContent: 'center' },
   disabled: { opacity: 0.5 },
 });

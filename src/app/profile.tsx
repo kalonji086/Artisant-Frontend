@@ -1,4 +1,4 @@
-import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -33,9 +33,13 @@ export default function ProfileScreen() {
       <ScrollView contentContainerStyle={styles.content}>
         <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
           <View style={[styles.avatar, { backgroundColor: theme.accent }]}>
-            <Text style={styles.avatarText}>
-              {(profile?.full_name?.trim().charAt(0) || 'A').toUpperCase()}
-            </Text>
+            {profile?.avatar_url ? (
+              <Image source={{ uri: profile.avatar_url }} style={styles.avatarImage} />
+            ) : (
+              <Text style={styles.avatarText}>
+                {(profile?.full_name?.trim().charAt(0) || 'A').toUpperCase()}
+              </Text>
+            )}
           </View>
           <Text style={[styles.title, { color: theme.text }]}>{profile?.full_name ?? t('Mon profil')}</Text>
           <Text style={[styles.subtitle, { color: theme.textSecondary }]}>{session?.user.email ?? ''}</Text>
@@ -119,7 +123,8 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#f3f5f8' },
   content: { flexGrow: 1, padding: 18, gap: 12, justifyContent: 'flex-start' },
   card: { alignItems: 'center', backgroundColor: '#fff', borderRadius: 18, padding: 22, gap: 6 },
-  avatar: { width: 76, height: 76, borderRadius: 38, alignItems: 'center', justifyContent: 'center', backgroundColor: '#1877F2', marginBottom: 8 },
+  avatar: { width: 76, height: 76, borderRadius: 38, alignItems: 'center', justifyContent: 'center', backgroundColor: '#1877F2', marginBottom: 8, overflow: 'hidden' },
+  avatarImage: { width: '100%', height: '100%' },
   avatarText: { color: '#fff', fontSize: 30, fontWeight: '800' },
   title: { color: '#101828', fontSize: 22, fontWeight: '800', textAlign: 'center' },
   subtitle: { color: '#667085', fontSize: 14, textAlign: 'center' },

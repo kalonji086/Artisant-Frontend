@@ -1,10 +1,10 @@
 import { useEffect, useRef } from 'react';
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase-client';
-import { hasRegisteredPushToken, registerPushToken } from '@/lib/push-notifications';
+import { registerPushToken } from '@/lib/push-notifications';
 
 export function PushNotificationRegistration() {
   const { session } = useAuth();
@@ -15,20 +15,24 @@ export function PushNotificationRegistration() {
   useEffect(() => {
     if (!userId || Platform.OS === 'web') return;
     let active = true;
-    void hasRegisteredPushToken(userId)
-      .then((registered) => {
-        if (!active || !registered) return;
-        return registerPushToken(userId).then((permission) => {
-          if (!permission.granted) {
-            console.info('[push] Les notifications système ne sont pas autorisées sur cet appareil.');
-          }
-        });
-      })
-      .catch((error: unknown) => {
+    const synchronizeToken = async () => {
+      try {
+        const permission = await Notifications.getPermissionsAsync();
+        if (!active || !permission.granted) return;
+        await registerPushToken(userId, { requestPermission: false });
+      } catch (error: unknown) {
         console.error('[push] Enregistrement du téléphone impossible:', error);
-      });
+      }
+    };
+
+    void synchronizeToken();
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void synchronizeToken();
+    });
+
     return () => {
       active = false;
+      subscription.remove();
     };
   }, [userId]);
 

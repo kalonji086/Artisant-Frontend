@@ -1,6 +1,8 @@
 import { useFonts } from 'expo-font';
 import * as SplashScreen from 'expo-splash-screen';
 import { Alert, View, ActivityIndicator } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { useRouter, useSegments } from 'expo-router';
 import { AuthProvider, useAuth } from '@/lib/auth-context';
 import { UserPreferencesProvider } from '@/lib/user-preferences-context';
@@ -55,17 +57,20 @@ export default function TabLayout() {
   }
 
   return (
-    <AuthProvider>
-      <UserPreferencesProvider>
-        <StartupSplash />
-        <AuthGuard />
-        <LocationTracker />
-        <PushNotificationRegistration />
-        <UnreadNotificationCountProvider>
-          <AppTabs />
-        </UnreadNotificationCountProvider>
-      </UserPreferencesProvider>
-    </AuthProvider>
+    <SafeAreaProvider>
+      <StatusBar style="auto" />
+      <AuthProvider>
+        <UserPreferencesProvider>
+          <StartupSplash />
+          <AuthGuard />
+          <LocationTracker />
+          <PushNotificationRegistration />
+          <UnreadNotificationCountProvider>
+            <AppTabs />
+          </UnreadNotificationCountProvider>
+        </UserPreferencesProvider>
+      </AuthProvider>
+    </SafeAreaProvider>
   );
 }
 
@@ -95,7 +100,11 @@ function AuthGuard() {
   const inAuth = segments[0] === '(auth)';
   const current = segments[0] ?? 'index';
   const authPage = segments[1] ?? '';
-  const canStayInAuth = authPage === 'reset-password' || authPage === 'legal';
+  const canStayInAuth =
+    authPage === 'reset-password'
+    || authPage === 'legal'
+    || authPage === 'help'
+    || authPage === 'support-request';
   const userId = session?.user.id;
   const role = profile?.role;
 
@@ -128,7 +137,7 @@ function AuthGuard() {
   useEffect(() => {
     if (loading) return;
     if (!userId) {
-      if (!inAuth) router.replace('/(auth)/login');
+      if (!inAuth && current !== 'account-deletion') router.replace('/(auth)/login');
       return;
     }
     if (!role) return; // profil en cours de chargement

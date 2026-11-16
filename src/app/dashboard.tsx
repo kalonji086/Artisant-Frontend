@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -19,6 +19,7 @@ import { supabase } from '@/lib/supabase-client';
 import { useAuth } from '@/lib/auth-context';
 import { useTheme } from '@/hooks/use-theme';
 import { useTranslate, useUserPreferences } from '@/lib/user-preferences-context';
+import { useUnreadNotificationCount } from '@/hooks/use-unread-notification-count';
 
 type Quote = {
   id: string;
@@ -35,11 +36,13 @@ export default function DashboardScreen() {
   const theme = useTheme();
   const t = useTranslate();
   const { preferences } = useUserPreferences();
+  const unreadNotificationCount = useUnreadNotificationCount();
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [drawerVisible, setDrawerVisible] = useState(false);
+  const [realtimeConnected, setRealtimeConnected] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
   const requestsOffset = useRef(0);
 
@@ -89,6 +92,7 @@ export default function DashboardScreen() {
       .channel(`artisan-quotes-${userId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'quotes', filter: `artisan_id=eq.${userId}` }, () => loadQuotes())
       .subscribe((status) => {
+        setRealtimeConnected(status === 'SUBSCRIBED');
         if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
           console.warn('[dashboard] Synchronisation des demandes indisponible:', status);
         }
@@ -124,6 +128,34 @@ export default function DashboardScreen() {
     .reduce((sum, q) => sum + Number(q.price ?? 0), 0);
   const pending = quotes.filter(isNew);
   const accepted = quotes.filter((q) => q.status === 'accepted');
+  const locale = preferences.language === 'en' ? 'en-US' : 'fr-FR';
+  const weeklyActivity = useMemo(() => {
+    const days = Array.from({ length: 7 }, (_, index) => {
+      const date = new Date();
+      date.setHours(0, 0, 0, 0);
+      date.setDate(date.getDate() - (6 - index));
+      const key = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+      return { date, key, count: 0 };
+    });
+    const byDay = new Map(days.map((day) => [day.key, day]));
+
+    quotes.forEach((quote) => {
+      const date = new Date(quote.created_at);
+      if (Number.isNaN(date.getTime())) return;
+      const day = byDay.get(`${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`);
+      if (day) day.count += 1;
+    });
+
+    return days;
+  }, [quotes]);
+  const weeklyMax = Math.max(1, ...weeklyActivity.map((day) => day.count));
+  const statusBreakdown = [
+    { label: 'Nouvelles demandes', value: pending.length, color: '#F59E0B' },
+    { label: 'En cours', value: accepted.length, color: '#3B82F6' },
+    { label: 'Terminées', value: count('completed'), color: '#22C55E' },
+    { label: 'Refusées', value: count('rejected'), color: '#EF4444' },
+  ];
+  const statusMax = Math.max(1, ...statusBreakdown.map((item) => item.value));
 
   if (loading) {
     return (
@@ -158,15 +190,28 @@ export default function DashboardScreen() {
               {profile?.profession ? ` · ${profile.profession}` : ''}
             </Text>
           </View>
-          <TouchableOpacity style={[styles.homeButton, { borderColor: theme.accent }]} onPress={() => router.push('/settings')} accessibilityLabel={t('Paramètres')}>
-            <Ionicons name="settings-outline" size={19} color={theme.accent} />
+          <TouchableOpacity
+            style={[styles.notificationButton, { backgroundColor: theme.backgroundElement }]}
+            onPress={() => router.push('/notifications')}
+            accessibilityLabel={t('Notifications')}>
+            <Ionicons name="notifications-outline" size={21} color={theme.text} />
+            {unreadNotificationCount > 0 && (
+              <View style={styles.notificationBadge}>
+                <Text style={styles.notificationBadgeText}>
+                  {unreadNotificationCount > 9 ? '9+' : unreadNotificationCount}
+                </Text>
+              </View>
+            )}
           </TouchableOpacity>
         </View>
 
-        <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
+        <View style={[styles.availabilityCard, { backgroundColor: theme.backgroundElement }]}>
           <View style={styles.row}>
-            <View style={styles.center}>
-              <Text style={[styles.cardTitle, { color: theme.text }]}>{t('Disponibilité')}</Text>
+            <View style={styles.availabilityCopy}>
+              <View style={styles.availabilityTitleRow}>
+                <View style={[styles.availabilityDot, { backgroundColor: profile?.is_available ? '#22C55E' : theme.textSecondary }]} />
+                <Text style={[styles.cardTitle, { color: theme.text }]}>{t('Disponibilité')}</Text>
+              </View>
               <Text style={[styles.muted, { color: theme.textSecondary }]}>
                 {profile?.is_available ? t('Visible par les clients proches') : t('Masqué des recherches')}
               </Text>
@@ -182,6 +227,64 @@ export default function DashboardScreen() {
           <Stat label="Revenus" value={`${revenue.toLocaleString(preferences.language === 'en' ? 'en-US' : 'fr-FR')}`} color="#5856D6" theme={theme} t={t} />
         </View>
 
+        <View style={[styles.chartCard, { backgroundColor: theme.backgroundElement }]}>
+          <View style={styles.chartHeader}>
+            <View style={styles.chartTitleGroup}>
+              <Text style={[styles.cardTitle, { color: theme.text }]}>{t('Activité des 7 derniers jours')}</Text>
+              <Text style={[styles.chartSubtitle, { color: theme.textSecondary }]}>{t('Nombre de demandes reçues')}</Text>
+            </View>
+            <View style={styles.liveLabel}>
+              <View style={[styles.liveDot, { backgroundColor: realtimeConnected ? '#22C55E' : '#F59E0B' }]} />
+              <Text style={[styles.liveText, { color: theme.textSecondary }]}>
+                {realtimeConnected ? t('En direct') : t('Hors ligne')}
+              </Text>
+            </View>
+          </View>
+          <View style={styles.barChart}>
+            {weeklyActivity.map((day) => (
+              <View key={day.key} style={styles.barColumn}>
+                <Text style={[styles.barValue, { color: theme.textSecondary }]}>{day.count}</Text>
+                <View style={styles.barTrack}>
+                  <View
+                    style={[
+                      styles.activityBar,
+                      {
+                        height: `${Math.max(4, (day.count / weeklyMax) * 100)}%`,
+                        backgroundColor: theme.accent,
+                      },
+                    ]}
+                  />
+                </View>
+                <Text style={[styles.barDay, { color: theme.textSecondary }]}>
+                  {day.date.toLocaleDateString(locale, { weekday: 'short' }).replace('.', '')}
+                </Text>
+              </View>
+            ))}
+          </View>
+        </View>
+
+        <View style={[styles.chartCard, { backgroundColor: theme.backgroundElement }]}>
+          <Text style={[styles.cardTitle, { color: theme.text }]}>{t('Répartition des demandes')}</Text>
+          <View style={styles.statusChart}>
+            {statusBreakdown.map((item) => (
+              <View key={item.label} style={styles.statusRow}>
+                <View style={styles.statusLabelRow}>
+                  <Text style={[styles.statusLabel, { color: theme.textSecondary }]}>{t(item.label)}</Text>
+                  <Text style={[styles.statusValue, { color: theme.text }]}>{item.value}</Text>
+                </View>
+                <View style={[styles.statusTrack, { backgroundColor: theme.backgroundSelected }]}>
+                  <View
+                    style={[
+                      styles.statusBar,
+                      { width: `${(item.value / statusMax) * 100}%`, backgroundColor: item.color },
+                    ]}
+                  />
+                </View>
+              </View>
+            ))}
+          </View>
+        </View>
+
         <Text
           style={[styles.sectionTitle, { color: theme.text }]}
           onLayout={(event) => {
@@ -192,7 +295,7 @@ export default function DashboardScreen() {
         {!!loadError && <Text style={styles.error}>{loadError}</Text>}
         {pending.length === 0 && <Text style={[styles.muted, { color: theme.textSecondary }]}>{t('Aucune nouvelle demande.')}</Text>}
         {pending.map((q) => (
-          <QuoteCard key={q.id} quote={q} theme={theme} t={t} locale={preferences.language === 'en' ? 'en-US' : 'fr-FR'}>
+          <QuoteCard key={q.id} quote={q} theme={theme} t={t} locale={locale}>
             <ActionButton label="Accepter" color="#34C759" onPress={() => respond(q.id, 'accept')} t={t} />
             <ActionButton label="Refuser" color="#FF3B30" onPress={() => respond(q.id, 'reject')} t={t} />
             <ActionButton label="Chat" color={theme.accent} onPress={() => openChat(q.id)} t={t} />
@@ -202,19 +305,11 @@ export default function DashboardScreen() {
         <Text style={[styles.sectionTitle, { color: theme.text }]}>{t('Travaux en cours')}</Text>
         {accepted.length === 0 && <Text style={[styles.muted, { color: theme.textSecondary }]}>{t('Aucun travail en cours.')}</Text>}
         {accepted.map((q) => (
-          <QuoteCard key={q.id} quote={q} theme={theme} t={t} locale={preferences.language === 'en' ? 'en-US' : 'fr-FR'}>
+          <QuoteCard key={q.id} quote={q} theme={theme} t={t} locale={locale}>
             <ActionButton label="Marquer terminé" color={theme.accent} onPress={() => respond(q.id, 'complete')} t={t} />
             <ActionButton label="Chat" color="#5856D6" onPress={() => openChat(q.id)} t={t} />
           </QuoteCard>
         ))}
-
-        <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
-          <Text style={[styles.cardTitle, { color: theme.text }]}>{t('Mon profil')}</Text>
-          <Text style={[styles.muted, { color: theme.textSecondary }]}>{t('Téléphone')} : {profile?.phone ?? t('Non renseigné')}</Text>
-          <Text style={[styles.muted, { color: theme.textSecondary }]}>{t('Ville')} : {profile?.city ?? t('Non renseignée')}</Text>
-          <Text style={[styles.muted, { color: theme.textSecondary }]}>{t('Note')} : {Number(profile?.rating ?? 0).toFixed(1)} / 5</Text>
-          {!!profile?.description && <Text style={[styles.muted, { color: theme.textSecondary }]}>{profile.description}</Text>}
-        </View>
 
         <TouchableOpacity style={styles.logout} onPress={signOut}>
           <Ionicons name="log-out-outline" size={18} color="#FF3B30" />
@@ -255,7 +350,6 @@ export default function DashboardScreen() {
               t={t}
             />
             <DrawerItem label="Messages" icon="chatbubbles-outline" onPress={() => { setDrawerVisible(false); router.push('/messages'); }} theme={theme} t={t} />
-            <DrawerItem label="Notifications" icon="notifications-outline" onPress={() => { setDrawerVisible(false); router.push('/notifications'); }} theme={theme} t={t} />
             <DrawerItem label="Accueil et carte" icon="map-outline" onPress={() => { setDrawerVisible(false); router.push('/'); }} theme={theme} t={t} />
             <DrawerItem label="Mon profil" icon="person-outline" onPress={() => { setDrawerVisible(false); router.push('/profile'); }} theme={theme} t={t} />
             <DrawerItem label="Paramètres" icon="settings-outline" onPress={() => { setDrawerVisible(false); router.push('/settings'); }} theme={theme} t={t} />
@@ -340,28 +434,53 @@ function ActionButton(props: { label: string; color: string; onPress: () => void
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#f5f5f5' },
+  safe: { flex: 1 },
   center: { flex: 1 },
-  content: { padding: 16, gap: 12 },
-  header: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  menuButton: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 20, backgroundColor: '#fff' },
-  title: { fontSize: 26, fontWeight: 'bold', color: '#222' },
-  subtitle: { fontSize: 14, color: '#666' },
-  homeButton: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderColor: '#007AFF', borderRadius: 20, paddingHorizontal: 12, paddingVertical: 8 },
-  homeButtonText: { color: '#007AFF', fontWeight: '600' },
-  card: { backgroundColor: '#fff', borderRadius: 12, padding: 16, gap: 4 },
+  content: { padding: 16, paddingBottom: 28, gap: 16 },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 4 },
+  menuButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 14 },
+  notificationButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 14 },
+  notificationBadge: { position: 'absolute', top: -3, right: -3, minWidth: 18, height: 18, borderRadius: 9, paddingHorizontal: 4, alignItems: 'center', justifyContent: 'center', backgroundColor: '#EF4444', borderWidth: 1, borderColor: '#fff' },
+  notificationBadgeText: { color: '#fff', fontSize: 10, fontWeight: '800' },
+  title: { fontSize: 22, fontWeight: '800' },
+  subtitle: { fontSize: 13, marginTop: 2 },
+  card: { borderRadius: 16, padding: 16, gap: 4 },
+  availabilityCard: { borderRadius: 16, padding: 16 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  cardTitle: { fontSize: 16, fontWeight: '600', color: '#222' },
-  muted: { fontSize: 14, color: '#666' },
-  stats: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
-  stat: { flexGrow: 1, flexBasis: '45%', backgroundColor: '#fff', borderRadius: 12, padding: 16 },
-  statValue: { fontSize: 24, fontWeight: 'bold' },
-  statLabel: { fontSize: 13, color: '#666', marginTop: 2 },
-  sectionTitle: { fontSize: 18, fontWeight: 'bold', color: '#222', marginTop: 8 },
-  actions: { flexDirection: 'row', gap: 8, marginTop: 8 },
-  action: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8 },
+  availabilityCopy: { flex: 1, gap: 5 },
+  availabilityTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  availabilityDot: { width: 8, height: 8, borderRadius: 4 },
+  cardTitle: { fontSize: 16, fontWeight: '700' },
+  muted: { fontSize: 13, lineHeight: 19 },
+  stats: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  stat: { flexGrow: 1, flexBasis: '45%', minHeight: 92, borderRadius: 16, padding: 15, justifyContent: 'center', gap: 3 },
+  statValue: { fontSize: 25, fontWeight: '800' },
+  statLabel: { fontSize: 12, lineHeight: 16, fontWeight: '500' },
+  chartCard: { borderRadius: 16, padding: 16, gap: 14 },
+  chartHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 },
+  chartTitleGroup: { flex: 1 },
+  chartSubtitle: { fontSize: 12, marginTop: 4 },
+  liveLabel: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingTop: 2 },
+  liveDot: { width: 7, height: 7, borderRadius: 4 },
+  liveText: { fontSize: 10, fontWeight: '600' },
+  barChart: { height: 144, flexDirection: 'row', alignItems: 'stretch', gap: 7, paddingTop: 4 },
+  barColumn: { flex: 1, alignItems: 'center', justifyContent: 'flex-end', gap: 6 },
+  barValue: { fontSize: 10, fontWeight: '600' },
+  barTrack: { width: '72%', height: 98, justifyContent: 'flex-end', overflow: 'hidden', borderRadius: 7, backgroundColor: '#8b8b8b22' },
+  activityBar: { width: '100%', minHeight: 4, borderRadius: 7 },
+  barDay: { fontSize: 10, textTransform: 'capitalize' },
+  statusChart: { gap: 12, marginTop: 2 },
+  statusRow: { gap: 6 },
+  statusLabelRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
+  statusLabel: { fontSize: 12, fontWeight: '500' },
+  statusValue: { fontSize: 12, fontWeight: '700' },
+  statusTrack: { height: 7, overflow: 'hidden', borderRadius: 4 },
+  statusBar: { height: '100%', borderRadius: 4 },
+  sectionTitle: { fontSize: 17, fontWeight: '800', marginTop: 3 },
+  actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
+  action: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 10 },
   actionText: { color: '#fff', fontWeight: '600' },
-  logout: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, padding: 14 },
+  logout: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, padding: 14, marginTop: 4 },
   logoutText: { color: '#FF3B30', fontWeight: '600' },
   error: { color: '#b42318', backgroundColor: '#fef3f2', borderRadius: 8, padding: 10, fontSize: 13 },
   drawerOverlay: { flex: 1, flexDirection: 'row', backgroundColor: 'rgba(16, 24, 40, 0.45)' },

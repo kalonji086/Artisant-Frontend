@@ -8,6 +8,7 @@ import {
   RefreshControl,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   TouchableOpacity,
@@ -38,6 +39,7 @@ type MyQuote = {
   price: number | null;
   created_at: string;
   artisan_id: string | null;
+  share_location_with_artisan: boolean;
   artisan: { full_name: string | null; phone: string | null; profession: string | null } | null;
 };
 
@@ -71,6 +73,7 @@ export default function MyQuotesScreen() {
   const [urgency, setUrgency] = useState<(typeof URGENCIES)[number]['key']>('normal');
   const [address, setAddress] = useState('');
   const [budget, setBudget] = useState('');
+  const [shareLocation, setShareLocation] = useState(false);
   const [sending, setSending] = useState(false);
   const [quotes, setQuotes] = useState<MyQuote[]>([]);
   const [loading, setLoading] = useState(true);
@@ -81,7 +84,7 @@ export default function MyQuotesScreen() {
     if (!userId) return;
     const { data, error } = await supabase
       .from('quotes')
-      .select('id, title, category, description, urgency, address, budget, status, price, created_at, artisan_id')
+      .select('id, title, category, description, urgency, address, budget, status, price, created_at, artisan_id, share_location_with_artisan')
       .eq('client_id', userId)
       .order('created_at', { ascending: false });
     if (error) console.warn('[quotes]', error.message);
@@ -131,6 +134,10 @@ export default function MyQuotesScreen() {
     setSending(true);
     try {
       const coords = await getCurrentCoords().catch(() => null);
+      if (shareLocation && !coords) {
+        Alert.alert(t('Position indisponible'), t('Autorisez la localisation pour partager votre position avec l’artisan attribué.'));
+        return;
+      }
       const { error } = await supabase.rpc('create_quote_request', {
         p_description: description.trim(),
         p_latitude: coords?.latitude ?? null,
@@ -140,6 +147,7 @@ export default function MyQuotesScreen() {
         p_urgency: urgency,
         p_address: address.trim() || null,
         p_budget: budgetValue,
+        p_share_location: shareLocation,
       });
       if (error) throw error;
       setCategory(null);
@@ -148,6 +156,7 @@ export default function MyQuotesScreen() {
       setUrgency('normal');
       setAddress('');
       setBudget('');
+      setShareLocation(false);
       setTab('waiting');
       Alert.alert(t('Demande envoyée'), t('Elle est en attente : l’équipe va l’attribuer à l’artisan le plus adapté.'));
       load();
@@ -156,6 +165,16 @@ export default function MyQuotesScreen() {
     } finally {
       setSending(false);
     }
+  };
+
+  const updateQuoteLocationSharing = async (quote: MyQuote) => {
+    const share = !quote.share_location_with_artisan;
+    const { error } = await supabase.rpc('set_quote_location_sharing', {
+      p_quote_id: quote.id,
+      p_share_location: share,
+    });
+    if (error) return Alert.alert(t('Modification impossible'), errorMessage(error));
+    await load();
   };
 
   const openChat = async (quoteId: string) => {
@@ -235,6 +254,16 @@ export default function MyQuotesScreen() {
               <Text style={[styles.label, { color: theme.text }]}>{t('Budget estimé (optionnel)')}</Text>
               <TextInput style={[styles.field, { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected, color: theme.text }]} placeholder={t('Montant')} placeholderTextColor={theme.textSecondary} value={budget} onChangeText={setBudget} keyboardType="decimal-pad" maxLength={12} />
 
+              <View style={[styles.shareLocationRow, { backgroundColor: theme.backgroundElement }]}>
+                <View style={styles.flex}>
+                  <Text style={[styles.shareLocationTitle, { color: theme.text }]}>{t('Partager ma position avec l’artisan attribué')}</Text>
+                  <Text style={[styles.muted, { color: theme.textSecondary }]}>
+                    {t('Facultatif : elle sera visible uniquement par l’artisan attribué pendant cette demande.')}
+                  </Text>
+                </View>
+                <Switch value={shareLocation} onValueChange={setShareLocation} />
+              </View>
+
               <TouchableOpacity style={[styles.send, { backgroundColor: theme.accent }, sending && styles.disabled]} onPress={send} disabled={sending}>
                 {sending ? <ActivityIndicator color="#fff" /> : <Text style={styles.sendText}>{t('Envoyer la demande')}</Text>}
               </TouchableOpacity>
@@ -274,6 +303,21 @@ export default function MyQuotesScreen() {
                 <Text style={[styles.desc, { color: theme.text }]}>{item.description}</Text>
                 {!!item.address && <Text style={[styles.muted, { color: theme.textSecondary }]}>📍 {item.address}</Text>}
                 {item.budget != null && <Text style={[styles.muted, { color: theme.textSecondary }]}>{t('Budget')} : {item.budget}</Text>}
+                {(item.share_location_with_artisan
+                  || (item.artisan_id && item.status !== 'completed' && item.status !== 'rejected')) && (
+                  <TouchableOpacity
+                    style={[styles.locationConsentButton, { borderColor: theme.accent }]}
+                    onPress={() => void updateQuoteLocationSharing(item)}>
+                    <Ionicons
+                      name={item.share_location_with_artisan ? 'location' : 'location-outline'}
+                      size={16}
+                      color={theme.accent}
+                    />
+                    <Text style={[styles.locationConsentText, { color: theme.accent }]}>
+                      {item.share_location_with_artisan ? t('Arrêter le partage de position') : t('Partager ma position pour cette demande')}
+                    </Text>
+                  </TouchableOpacity>
+                )}
                 {item.artisan ? (
                   <View style={[styles.artisanBox, { backgroundColor: theme.background }]}>
                     <View style={styles.flex}>
@@ -320,6 +364,10 @@ const styles = StyleSheet.create({
   sendText: { color: '#fff', fontWeight: '600', fontSize: 16 },
   support: { flexDirection: 'row', gap: 8, alignItems: 'center', justifyContent: 'center', paddingVertical: 12, borderRadius: 10, borderWidth: 1, borderColor: '#007AFF', backgroundColor: '#fff' },
   supportText: { color: '#007AFF', fontWeight: '600' },
+  shareLocationRow: { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 10, padding: 12 },
+  shareLocationTitle: { fontSize: 13, fontWeight: '700', marginBottom: 3 },
+  locationConsentButton: { flexDirection: 'row', alignItems: 'center', gap: 7, alignSelf: 'flex-start', borderWidth: 1, borderRadius: 18, paddingHorizontal: 10, paddingVertical: 7, marginTop: 4 },
+  locationConsentText: { fontSize: 12, fontWeight: '600' },
   loader: { marginTop: 8 },
   card: { backgroundColor: '#fff', borderRadius: 12, padding: 14, gap: 6 },
   row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },

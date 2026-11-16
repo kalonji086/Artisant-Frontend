@@ -3,10 +3,23 @@ import { supabase } from '@/lib/supabase-client';
 
 export type Coords = { latitude: number; longitude: number };
 
+let foregroundPermissionRequest: Promise<boolean> | null = null;
+
+export async function requestForegroundLocationPermission(): Promise<boolean> {
+  if (!foregroundPermissionRequest) {
+    const request = Location.requestForegroundPermissionsAsync()
+      .then(({ status }) => status === 'granted')
+      .finally(() => {
+        if (foregroundPermissionRequest === request) foregroundPermissionRequest = null;
+      });
+    foregroundPermissionRequest = request;
+  }
+  return foregroundPermissionRequest;
+}
+
 // GPS du téléphone (gratuit). Retourne null si la permission est refusée.
 export async function getCurrentCoords(): Promise<Coords | null> {
-  const { status } = await Location.requestForegroundPermissionsAsync();
-  if (status !== 'granted') return null;
+  if (!await requestForegroundLocationPermission()) return null;
   const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
   return { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
 }

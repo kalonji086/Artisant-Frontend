@@ -76,6 +76,7 @@ export default function AppTabs() {
         options={{
           title: t('Messages'),
           tabBarIcon: ({ color, size }) => tabIcon('messages', color, size),
+          tabBarHideOnKeyboard: true,
         }}
       />
       <Tabs.Screen
@@ -99,6 +100,14 @@ export default function AppTabs() {
           title: t('Paramètres'),
         }}
       />
+      <Tabs.Screen
+        name="account-deletion"
+        options={{
+          href: null,
+          title: t('Demande de suppression'),
+          tabBarStyle: { display: 'none' },
+        }}
+      />
       {/* Écran de recherche : accessible via navigation, caché des onglets */}
       <Tabs.Screen
         name="search"
@@ -119,6 +128,8 @@ export default function AppTabs() {
       <Tabs.Screen name="(auth)/signup" options={{ href: null, title: t('Créer un compte'), tabBarStyle: { display: 'none' } }} />
       <Tabs.Screen name="(auth)/forgot-password" options={{ href: null, title: t('Mot de passe oublié'), tabBarStyle: { display: 'none' } }} />
       <Tabs.Screen name="(auth)/reset-password" options={{ href: null, title: t('Nouveau mot de passe'), tabBarStyle: { display: 'none' } }} />
+      <Tabs.Screen name="(auth)/help" options={{ href: null, title: t('Centre d’aide'), tabBarStyle: { display: 'none' } }} />
+      <Tabs.Screen name="(auth)/support-request" options={{ href: null, title: t('Écrire au support'), tabBarStyle: { display: 'none' } }} />
       <Tabs.Screen name="(auth)/legal/[slug]" options={{ href: null, title: t('Informations légales'), tabBarStyle: { display: 'none' } }} />
     </Tabs>
   );

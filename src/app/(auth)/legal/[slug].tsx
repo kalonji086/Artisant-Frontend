@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { WebView } from 'react-native-webview';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LEGAL_URLS } from '@/lib/legal-links';
+import { getOfflineLegalHtml } from '@/lib/legal-offline';
 import { supabase } from '@/lib/supabase-client';
 
 type LegalSlug = keyof typeof LEGAL_URLS;
@@ -13,9 +15,11 @@ export default function LegalDocumentScreen() {
   const router = useRouter();
   const { slug } = useLocalSearchParams<{ slug: string }>();
   const validSlug = slug === 'privacy' || slug === 'terms' ? (slug as LegalSlug) : null;
-  const webView = useRef<WebView>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
+  const [webViewLoading, setWebViewLoading] = useState(false);
+  const [html, setHtml] = useState<string | null>(null);
+  const [offlineCopy, setOfflineCopy] = useState<'cached' | 'bundled' | null>(null);
+  const [refreshVersion, setRefreshVersion] = useState(0);
   const title = validSlug === 'privacy'
     ? 'Politique de confidentialité'
     : validSlug === 'terms'
@@ -29,17 +33,71 @@ export default function LegalDocumentScreen() {
 
   useEffect(() => {
     if (!validSlug) return;
+    let active = true;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8_000);
+    const cacheKey = `@artisant/legal-document/${validSlug}`;
+
+    const loadDocument = async () => {
+      setLoading(true);
+      try {
+        const response = await fetch(LEGAL_URLS[validSlug], {
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const content = await response.text();
+        if (!content.trim() || !/<html[\s>]/i.test(content)) {
+          throw new Error('Le serveur a renvoyé un document légal invalide.');
+        }
+
+        try {
+          await AsyncStorage.setItem(cacheKey, content);
+        } catch (cacheError) {
+          console.warn('[legal] Mise en cache du document impossible:', cacheError);
+        }
+        if (active) {
+          setHtml(content);
+          setOfflineCopy(null);
+        }
+      } catch (loadError) {
+        if (!active) return;
+        console.warn('[legal] Chargement distant impossible, utilisation de la copie hors ligne:', loadError);
+        let cached: string | null = null;
+        try {
+          cached = await AsyncStorage.getItem(cacheKey);
+        } catch (cacheError) {
+          console.warn('[legal] Lecture de la copie en cache impossible:', cacheError);
+        }
+        if (active) {
+          setHtml(cached || getOfflineLegalHtml(validSlug));
+          setOfflineCopy(cached ? 'cached' : 'bundled');
+        }
+      } finally {
+        clearTimeout(timeout);
+        if (active) setLoading(false);
+      }
+    };
+
+    void loadDocument();
+
+    return () => {
+      active = false;
+      controller.abort();
+      clearTimeout(timeout);
+    };
+  }, [validSlug, refreshVersion]);
+
+  useEffect(() => {
+    if (!validSlug) return;
     const channel = supabase
       .channel('legal-document-updates', { config: { private: true } })
       .on('broadcast', { event: 'document_changed' }, ({ payload }) => {
         if (payload?.slug !== 'privacy' && payload?.slug !== 'terms') return;
-        setError(false);
-        webView.current?.reload();
+        setRefreshVersion((version) => version + 1);
       })
       .subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          webView.current?.reload();
-        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
           console.warn('[legal] Actualisation temps réel indisponible:', status);
         }
       });
@@ -62,53 +120,48 @@ export default function LegalDocumentScreen() {
         <Text style={styles.title} numberOfLines={1}>{title}</Text>
       </View>
       <View style={styles.content}>
-      {validSlug ? (
-        <>
-          {loading && !error ? (
-            <View style={styles.loading}>
-              <ActivityIndicator size="large" color="#1877F2" />
-            </View>
-          ) : null}
-          {error ? (
-            <View style={styles.errorWrap}>
-              <Text style={styles.errorText}>Impossible de charger ce document. Vérifiez votre connexion.</Text>
-              <TouchableOpacity
-                style={styles.retry}
-                onPress={() => {
-                  setError(false);
-                  setLoading(true);
-                  webView.current?.reload();
-                }}>
-                <Text style={styles.retryText}>Réessayer</Text>
-              </TouchableOpacity>
-            </View>
-          ) : (
+        {validSlug && html ? (
+          <>
+            {offlineCopy ? (
+              <View style={styles.offlineNotice}>
+                <Text style={styles.offlineText}>
+                  {offlineCopy === 'cached'
+                    ? 'Hors ligne : dernière version enregistrée.'
+                    : 'Hors ligne : copie intégrée à l’application.'}
+                </Text>
+                <TouchableOpacity
+                  onPress={() => setRefreshVersion((version) => version + 1)}
+                  accessibilityRole="button">
+                  <Text style={styles.retryText}>Actualiser</Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
             <WebView
-              ref={webView}
-              key={validSlug}
-              source={{ uri: LEGAL_URLS[validSlug] }}
-              style={[styles.webview, loading && styles.hidden]}
-              cacheEnabled={false}
-              onLoadStart={() => setLoading(true)}
-              onLoadEnd={() => setLoading(false)}
-              onError={() => {
-                setLoading(false);
-                setError(true);
+              key={`${validSlug}-${refreshVersion}`}
+              source={{
+                html,
+                baseUrl: LEGAL_URLS[validSlug].replace(/\/legal\/(?:privacy|terms)$/, '/'),
               }}
-              onHttpError={(event) => {
-                if (event.nativeEvent.statusCode >= 400) {
-                  setLoading(false);
-                  setError(true);
-                }
-              }}
+              style={styles.webview}
+              cacheEnabled
+              onLoadStart={() => setWebViewLoading(true)}
+              onLoadEnd={() => setWebViewLoading(false)}
             />
-          )}
-        </>
-      ) : (
-        <View style={styles.errorWrap}>
-          <Text style={styles.errorText}>Document légal introuvable.</Text>
-        </View>
-      )}
+            {loading || webViewLoading ? (
+              <View style={styles.loading}>
+                <ActivityIndicator size="large" color="#1877F2" />
+              </View>
+            ) : null}
+          </>
+        ) : !validSlug ? (
+          <View style={styles.errorWrap}>
+            <Text style={styles.errorText}>Document légal introuvable.</Text>
+          </View>
+        ) : (
+          <View style={styles.loading}>
+            <ActivityIndicator size="large" color="#1877F2" />
+          </View>
+        )}
       </View>
     </SafeAreaView>
   );
@@ -129,10 +182,10 @@ const styles = StyleSheet.create({
   title: { flex: 1, marginLeft: 8, color: '#101828', fontSize: 16, fontWeight: '600' },
   content: { flex: 1 },
   webview: { flex: 1, backgroundColor: '#fff' },
-  hidden: { opacity: 0 },
   loading: { ...StyleSheet.absoluteFill, zIndex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff' },
   errorWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 14 },
   errorText: { color: '#475467', fontSize: 15, textAlign: 'center' },
-  retry: { paddingHorizontal: 20, paddingVertical: 11, borderRadius: 10, backgroundColor: '#1877F2' },
-  retryText: { color: '#fff', fontWeight: '700' },
+  offlineNotice: { minHeight: 40, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, paddingHorizontal: 12, backgroundColor: '#fff7e6', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#f0d7a2' },
+  offlineText: { flex: 1, color: '#8a5a00', fontSize: 12 },
+  retryText: { color: '#1877F2', fontWeight: '700', fontSize: 12 },
 });

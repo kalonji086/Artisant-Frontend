@@ -5,6 +5,7 @@ import {
   Alert,
   Linking,
   Platform,
+  Image,
   ScrollView,
   StyleSheet,
   Switch,
@@ -16,7 +17,6 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { api } from '@/lib/api';
 import { supabase } from '@/lib/supabase-client';
 import { useAuth } from '@/lib/auth-context';
 import { AccentColors } from '@/constants/theme';
@@ -24,6 +24,8 @@ import { useTheme } from '@/hooks/use-theme';
 import { useTranslate, useUserPreferences, type AccentColor, type ThemeMode, type AppLanguage } from '@/lib/user-preferences-context';
 import { hasRegisteredPushToken, registerPushToken, unregisterPushToken } from '@/lib/push-notifications';
 import * as Notifications from 'expo-notifications';
+import * as ImagePicker from 'expo-image-picker';
+import { uploadArtisanAvatar } from '@/lib/artisan-avatar';
 
 type ProfileDraft = {
   full_name: string;
@@ -49,12 +51,68 @@ export default function SettingsScreen() {
     description: profile?.description ?? '',
   });
   const [saving, setSaving] = useState(false);
+  const [avatarBusy, setAvatarBusy] = useState(false);
+  const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
+  const [failedAvatarSource, setFailedAvatarSource] = useState<string | null>(null);
   const [availabilityBusy, setAvailabilityBusy] = useState(false);
-  const [deletionBusy, setDeletionBusy] = useState(false);
   const [preferencesBusy, setPreferencesBusy] = useState(false);
 
   const updateDraft = (key: keyof ProfileDraft, value: string) => {
     setDraft((current) => ({ ...current, [key]: value }));
+  };
+
+  const chooseAvatar = async () => {
+    if (!userId || !isArtisan || avatarBusy) return;
+    try {
+      if (Platform.OS !== 'android') {
+        const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (!permission.granted) {
+          Alert.alert(
+            t('Accès aux photos refusé'),
+            t('Autorisez l’accès aux photos dans les paramètres pour choisir une image de profil.'),
+            [
+              { text: t('Annuler'), style: 'cancel' },
+              { text: t('Paramètres'), onPress: () => void Linking.openSettings() },
+            ]
+          );
+          return;
+        }
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+      if (result.canceled) return;
+
+      const photo = result.assets[0];
+      if (!photo) throw new Error(t('Aucune photo sélectionnée.'));
+      if (photo.fileSize && photo.fileSize > 5 * 1024 * 1024) {
+        throw new Error(t('La photo doit peser moins de 5 Mo.'));
+      }
+
+      setAvatarBusy(true);
+      setFailedAvatarSource(null);
+      setAvatarPreview(photo.uri);
+      await uploadArtisanAvatar(userId, {
+        uri: photo.uri,
+        mimeType: photo.mimeType,
+        fileName: photo.fileName,
+      });
+      await refreshProfile();
+      setAvatarPreview(null);
+      Alert.alert(t('Photo mise à jour'), t('Votre photo de profil est visible immédiatement.'));
+    } catch (error) {
+      setAvatarPreview(null);
+      Alert.alert(
+        t('Mise à jour de la photo impossible'),
+        error instanceof Error ? error.message : t('Réessayez plus tard.')
+      );
+    } finally {
+      setAvatarBusy(false);
+    }
   };
 
   const saveProfile = async () => {
@@ -129,41 +187,7 @@ export default function SettingsScreen() {
     }
   };
 
-  const submitDeletionRequest = async () => {
-    if (deletionBusy) return;
-    setDeletionBusy(true);
-    try {
-      const result = await api.post('/account/deletion-requests');
-      Alert.alert(
-        result.already_requested ? 'Demande déjà reçue' : 'Demande envoyée',
-        result.already_requested
-          ? 'Une demande de suppression de votre compte est déjà en cours de traitement.'
-          : 'Votre demande de suppression a été transmise à notre équipe. Votre compte reste actif jusqu’à son traitement.'
-      );
-    } catch (error) {
-      Alert.alert(
-        'Envoi impossible',
-        error instanceof Error ? error.message : 'Veuillez réessayer plus tard.'
-      );
-    } finally {
-      setDeletionBusy(false);
-    }
-  };
-
-  const confirmDeletionRequest = () => {
-    Alert.alert(
-      'Demander la suppression du compte',
-      'Votre demande sera transmise à notre équipe. Le compte ne sera pas supprimé immédiatement.',
-      [
-        { text: 'Annuler', style: 'cancel' },
-        {
-          text: 'Envoyer la demande',
-          style: 'destructive',
-          onPress: () => void submitDeletionRequest(),
-        },
-      ]
-    );
-  };
+  const avatarSource = avatarPreview ?? profile?.avatar_url ?? null;
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: theme.background }]}>
@@ -184,15 +208,41 @@ export default function SettingsScreen() {
           </Text>
         ) : null}
         <View style={[styles.identity, { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected }]}>
-          <View style={[styles.avatar, { backgroundColor: theme.accent }]}>
-            <Text style={styles.avatarText}>
-              {(profile?.full_name?.trim().charAt(0) || 'A').toUpperCase()}
-            </Text>
-          </View>
+          <TouchableOpacity
+            style={[styles.avatar, { backgroundColor: theme.accent }]}
+            onPress={() => void chooseAvatar()}
+            disabled={!isArtisan || avatarBusy}
+            accessibilityRole="button"
+            accessibilityLabel={t('Modifier la photo de profil')}>
+            {avatarSource && avatarSource !== failedAvatarSource ? (
+              <Image
+                key={avatarSource}
+                source={{ uri: avatarSource }}
+                style={styles.avatarImage}
+                onError={() => setFailedAvatarSource(avatarSource)}
+              />
+            ) : (
+              <Text style={styles.avatarText}>
+                {(profile?.full_name?.trim().charAt(0) || 'A').toUpperCase()}
+              </Text>
+            )}
+            {isArtisan && (
+              <View style={styles.avatarEdit}>
+                {avatarBusy
+                  ? <ActivityIndicator size="small" color="#fff" />
+                  : <Ionicons name="camera" size={13} color="#fff" />}
+              </View>
+            )}
+          </TouchableOpacity>
           <View style={styles.flex}>
             <Text style={[styles.name, { color: theme.text }]}>{profile?.full_name ?? t('Mon compte')}</Text>
             <Text style={[styles.muted, { color: theme.textSecondary }]}>{session?.user.email ?? ''}</Text>
             <Text style={[styles.role, { color: theme.accent }]}>{isArtisan ? t('Compte artisan') : t('Compte client')}</Text>
+            {isArtisan && (
+              <Text style={[styles.photoHint, { color: theme.textSecondary }]}>
+                {t('Touchez l’icône pour changer votre photo')}
+              </Text>
+            )}
           </View>
         </View>
 
@@ -317,16 +367,9 @@ export default function SettingsScreen() {
           </Text>
           <TouchableOpacity
             style={[styles.deleteButton, { backgroundColor: theme.background, borderColor: theme.backgroundSelected }]}
-            onPress={confirmDeletionRequest}
-            disabled={deletionBusy}>
-            {deletionBusy ? (
-              <ActivityIndicator color="#b42318" />
-            ) : (
-              <>
-                <Ionicons name="trash-outline" size={18} color="#b42318" />
-                <Text style={styles.deleteButtonText}>{t('Demander la suppression du compte')}</Text>
-              </>
-            )}
+            onPress={() => router.push('/account-deletion')}>
+            <Ionicons name="trash-outline" size={18} color="#b42318" />
+            <Text style={styles.deleteButtonText}>{t('Demander la suppression du compte')}</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
@@ -552,11 +595,14 @@ const styles = StyleSheet.create({
   headerSubtitle: { fontSize: 12, marginTop: 2 },
   content: { padding: 16, gap: 14, paddingBottom: 36 },
   identity: { flexDirection: 'row', alignItems: 'center', gap: 14, padding: 17, backgroundColor: '#fff', borderRadius: 18, borderWidth: 1 },
-  avatar: { width: 54, height: 54, borderRadius: 27, alignItems: 'center', justifyContent: 'center', backgroundColor: '#1877F2' },
+  avatar: { width: 60, height: 60, borderRadius: 30, alignItems: 'center', justifyContent: 'center', backgroundColor: '#1877F2', position: 'relative' },
+  avatarImage: { width: 60, height: 60, borderRadius: 30 },
+  avatarEdit: { position: 'absolute', right: -2, bottom: -2, width: 23, height: 23, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: '#344054', borderWidth: 2, borderColor: '#fff' },
   avatarText: { color: '#fff', fontSize: 22, fontWeight: '800' },
   name: { color: '#101828', fontSize: 16, fontWeight: '800' },
   muted: { color: '#667085', fontSize: 13, marginTop: 3 },
   role: { color: '#1877F2', fontSize: 12, fontWeight: '700', marginTop: 5 },
+  photoHint: { fontSize: 11, marginTop: 4 },
   card: { padding: 16, gap: 14, borderRadius: 18, backgroundColor: '#fff', borderWidth: 1, borderColor: '#eaecf0' },
   sectionHeading: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 2 },
   sectionIcon: { width: 34, height: 34, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },

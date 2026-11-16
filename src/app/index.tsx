@@ -1,18 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Image,
   Modal,
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase-client';
 import { useAuth } from '@/lib/auth-context';
@@ -26,6 +28,7 @@ import { useUnreadNotificationCount } from '@/hooks/use-unread-notification-coun
 
 type NearbyArtisan = {
   id: string;
+  entry_type?: 'artisan' | 'client';
   full_name: string | null;
   profession: string | null;
   description: string | null;
@@ -60,6 +63,8 @@ export default function HomeScreen() {
   const [error, setError] = useState<string | null>(null);
   const [me, setMe] = useState<Coords | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [artisanMapVisible, setArtisanMapVisible] = useState(false);
+  const [savingMapVisibility, setSavingMapVisibility] = useState(false);
   const hasLocation = me !== null;
   const requestId = useRef(0);
   const realtimeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -68,7 +73,7 @@ export default function HomeScreen() {
   const load = useCallback(async (quiet = false, coordsOverride?: Coords, persistLocation = true) => {
     const request = ++requestId.current;
     if (authLoading || profileLoading) return;
-    if (!session?.user.id || profile?.role !== 'client') {
+    if (!session?.user.id || (profile?.role !== 'client' && profile?.role !== 'artisan')) {
       setArtisans([]);
       setSelectedId(null);
       setMe(null);
@@ -81,6 +86,12 @@ export default function HomeScreen() {
     setError(null);
 
     try {
+      if (profile.role === 'artisan') {
+        const { data: visible, error: visibilityError } = await supabase.rpc('get_my_artisan_map_visibility');
+        if (visibilityError) throw visibilityError;
+        setArtisanMapVisible(visible === true);
+      }
+
       const coords = coordsOverride ?? await getCurrentCoords();
       if (request !== requestId.current) return;
       if (!coords) {
@@ -92,21 +103,33 @@ export default function HomeScreen() {
 
       setMe(coords);
       if (persistLocation) {
-        void saveMyLocation(coords).catch((err: unknown) => {
+        await saveMyLocation(coords).catch((err: unknown) => {
           console.warn('[home] Enregistrement de la position impossible:', errorMessage(err, 'erreur inconnue'));
         });
       }
 
-      const { data, error: rpcError } = await supabase.rpc('nearby_artisans', {
-        lat: coords.latitude,
-        lng: coords.longitude,
-        radius_meters: RADIUS_METERS,
-        profession_filter: filter,
-      });
-      if (rpcError) throw rpcError;
+      let rows: NearbyArtisan[];
+      if (profile.role === 'artisan') {
+        const { data, error: rpcError } = await supabase.rpc('artisan_map_entries', {
+          p_latitude: coords.latitude,
+          p_longitude: coords.longitude,
+          p_radius_meters: RADIUS_METERS,
+          p_profession_filter: filter,
+        });
+        if (rpcError) throw rpcError;
+        rows = (data as NearbyArtisan[] | null) ?? [];
+      } else {
+        const { data, error: rpcError } = await supabase.rpc('nearby_artisans', {
+          lat: coords.latitude,
+          lng: coords.longitude,
+          radius_meters: RADIUS_METERS,
+          profession_filter: filter,
+        });
+        if (rpcError) throw rpcError;
+        rows = (data as NearbyArtisan[] | null) ?? [];
+      }
       if (request !== requestId.current) return;
 
-      const rows = (data as NearbyArtisan[] | null) ?? [];
       setArtisans(rows);
       setSelectedId((current) => (current && rows.some((artisan) => artisan.id === current) ? current : null));
     } catch (err) {
@@ -126,6 +149,14 @@ export default function HomeScreen() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void load();
   }, [load]);
+
+  useFocusEffect(useCallback(() => {
+    if (profile?.role !== 'artisan') return;
+    const timer = setInterval(() => {
+      void load(true, undefined, false);
+    }, 60_000);
+    return () => clearInterval(timer);
+  }, [load, profile?.role]));
 
   const scheduleRealtimeRefresh = useCallback(() => {
     if (realtimeTimer.current) clearTimeout(realtimeTimer.current);
@@ -185,6 +216,17 @@ export default function HomeScreen() {
         }
       });
 
+    const artisanClientMapChannel = profile?.role === 'artisan'
+      ? supabase
+          .channel(`artisan_client_map:${userId}`, { config: { private: true } })
+          .on('broadcast', { event: 'client_location_changed' }, scheduleRealtimeRefresh)
+          .subscribe((status) => {
+            if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+              console.warn('[home] Synchronisation des positions partagées indisponible:', status);
+            }
+          })
+      : null;
+
     return () => {
       if (realtimeTimer.current) clearTimeout(realtimeTimer.current);
       realtimeTimer.current = null;
@@ -192,15 +234,31 @@ export default function HomeScreen() {
       void supabase.removeChannel(artisanLocationChannel);
       void supabase.removeChannel(artisanProfileChannel);
       void supabase.removeChannel(ownLocationChannel);
+      if (artisanClientMapChannel) void supabase.removeChannel(artisanClientMapChannel);
     };
-  }, [scheduleLocationRefresh, scheduleRealtimeRefresh, hasLocation, userId]);
+  }, [scheduleLocationRefresh, scheduleRealtimeRefresh, hasLocation, userId, profile?.role]);
+
+  const updateArtisanMapVisibility = async (visible: boolean) => {
+    if (!userId || savingMapVisibility) return;
+    setSavingMapVisibility(true);
+    try {
+      const { error: updateError } = await supabase.rpc('set_my_artisan_map_visibility', { p_visible: visible });
+      if (updateError) throw updateError;
+      setArtisanMapVisible(visible);
+      void load(true, undefined, false);
+    } catch (err) {
+      Alert.alert(t('Erreur'), errorMessage(err, t('Impossible de modifier la visibilité de votre position.')));
+    } finally {
+      setSavingMapVisibility(false);
+    }
+  };
 
   const normalizedQuery = searchQuery
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .trim();
-  const visibleArtisans = normalizedQuery
+  const visibleEntries = normalizedQuery
     ? artisans.filter((artisan) => {
         const searchText = [artisan.full_name, artisan.profession, artisan.city, artisan.description]
           .filter(Boolean)
@@ -211,7 +269,11 @@ export default function HomeScreen() {
         return searchText.includes(normalizedQuery);
       })
     : artisans;
-  const selected = visibleArtisans.find((artisan) => artisan.id === selectedId) ?? null;
+  const visibleArtisans = visibleEntries.filter((entry) => entry.entry_type !== 'client');
+  const visibleClients = visibleEntries.filter((entry) => entry.entry_type === 'client');
+  const selected = profile?.role === 'client'
+    ? visibleArtisans.find((artisan) => artisan.id === selectedId) ?? null
+    : null;
   const firstName = profile?.full_name?.trim().split(/\s+/)[0];
 
   return (
@@ -277,6 +339,23 @@ export default function HomeScreen() {
           <Ionicons name="chevron-down" size={16} color={theme.textSecondary} />
         </TouchableOpacity>
       </View>
+
+      {profile?.role === 'artisan' && (
+        <View style={[styles.locationShareRow, { backgroundColor: theme.backgroundElement }]}>
+          <View style={styles.flex}>
+            <Text style={[styles.locationShareTitle, { color: theme.text }]}>{t('Partager ma position sur la carte')}</Text>
+            <Text style={[styles.locationShareDescription, { color: theme.textSecondary }]}>
+              {t('Visible en temps réel aux clients et artisans proches. Désactivez à tout moment.')}
+            </Text>
+          </View>
+          <Switch
+            value={artisanMapVisible}
+            onValueChange={(value) => void updateArtisanMapVisibility(value)}
+            disabled={savingMapVisibility}
+            accessibilityLabel={t('Partager ma position sur la carte')}
+          />
+        </View>
+      )}
 
       <Modal
         visible={categoryPickerVisible}
@@ -414,7 +493,12 @@ export default function HomeScreen() {
 
       <View style={styles.mapArea}>
         {me ? (
-          <ArtisanMap center={me} artisans={visibleArtisans} onSelect={setSelectedId} fullScreen />
+          <ArtisanMap
+            center={me}
+            artisans={visibleEntries}
+            onSelect={profile?.role === 'client' ? setSelectedId : undefined}
+            fullScreen
+          />
         ) : (
           <View style={[styles.mapPlaceholder, { backgroundColor: theme.background }]}>
             <Ionicons name="map-outline" size={40} color={theme.accent} />
@@ -434,19 +518,29 @@ export default function HomeScreen() {
         <View style={styles.bottom}>
           <View style={[styles.listHeader, { backgroundColor: theme.backgroundElement }]}>
               <View style={styles.flex}>
-                <Text style={[styles.listTitle, { color: theme.text }]}>{t('Artisans disponibles')}</Text>
+                <Text style={[styles.listTitle, { color: theme.text }]}>
+                  {profile?.role === 'artisan' ? t('Carte en temps réel') : t('Artisans disponibles')}
+                </Text>
                 <Text style={[styles.listSubtitle, { color: theme.textSecondary }]}>
-                  {loading ? t('Recherche en cours…') : `${visibleArtisans.length} ${t(visibleArtisans.length === 1 ? 'résultat' : 'résultats')}`}
+                  {loading
+                    ? t('Recherche en cours…')
+                    : profile?.role === 'artisan'
+                      ? `${visibleArtisans.length} ${t(visibleArtisans.length === 1 ? 'artisan visible' : 'artisans visibles')} · ${visibleClients.length} ${t(visibleClients.length === 1 ? 'demande partagée' : 'demandes partagées')}`
+                      : `${visibleArtisans.length} ${t(visibleArtisans.length === 1 ? 'résultat' : 'résultats')}`}
                 </Text>
               </View>
               {loading && <ActivityIndicator color={theme.accent} />}
-              {!loading && visibleArtisans.length === 0 && !error && !normalizedQuery && (
-                <Text style={[styles.emptyText, { color: theme.textSecondary }]}>{t('Aucun artisan disponible à proximité.')}</Text>
+              {!loading && visibleEntries.length === 0 && !error && !normalizedQuery && (
+                <Text style={[styles.emptyText, { color: theme.textSecondary }]}>
+                  {profile?.role === 'artisan'
+                    ? t('Aucun artisan ou client avec position partagée à proximité.')
+                    : t('Aucun artisan disponible à proximité.')}
+                </Text>
               )}
-              {!loading && visibleArtisans.length === 0 && artisans.length > 0 && normalizedQuery ? (
+              {!loading && visibleEntries.length === 0 && artisans.length > 0 && normalizedQuery ? (
                 <Text style={[styles.emptyText, { color: theme.textSecondary }]}>{t('Aucun résultat pour cette recherche.')}</Text>
               ) : null}
-              {visibleArtisans.length > 0 && (
+              {profile?.role === 'client' && visibleArtisans.length > 0 && (
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.artisanList}>
                   {visibleArtisans.map((artisan) => (
                     <TouchableOpacity
@@ -533,6 +627,9 @@ const styles = StyleSheet.create({
   searchInput: { flex: 1, minWidth: 0, paddingVertical: 8, fontSize: 14 },
   categoryButton: { width: 130, minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 5, borderRadius: 13, paddingHorizontal: 10, backgroundColor: '#fff', elevation: 3 },
   categoryButtonText: { flex: 1, fontSize: 12, fontWeight: '700' },
+  locationShareRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginHorizontal: 14, marginBottom: 8, paddingHorizontal: 13, paddingVertical: 10, borderRadius: 13 },
+  locationShareTitle: { fontSize: 13, fontWeight: '700' },
+  locationShareDescription: { fontSize: 11, lineHeight: 15, marginTop: 2 },
   modalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(16, 24, 40, 0.42)' },
   categorySheet: { maxHeight: '75%', borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 20, paddingTop: 20, paddingBottom: 28 },
   sheetHeading: { flexDirection: 'row', alignItems: 'center', marginBottom: 15 },
