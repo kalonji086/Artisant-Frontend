@@ -43,6 +43,7 @@ type NearbyArtisan = {
   distance_m: number;
   latitude: number;
   longitude: number;
+  business_type?: 'enterprise' | 'subcontractor' | null;
 };
 
 const RADIUS_METERS = 50_000;
@@ -433,6 +434,11 @@ export default function HomeScreen() {
                   <Text style={[styles.meta, { color: theme.textSecondary }]}>
                     {[selected.profession, selected.city].filter(Boolean).join(' · ') || t('Professionnel')}
                   </Text>
+                  {selected.business_type ? (
+                    <Text style={[styles.meta, { color: theme.accent }]}>
+                      {selected.business_type === 'enterprise' ? t('Entreprise vérifiée') : t('Sous-traitance vérifiée')}
+                    </Text>
+                  ) : null}
                   <View style={styles.ratingRow}>
                     <Ionicons name="star" size={14} color="#f59e0b" />
                     <Text style={[styles.ratingText, { color: theme.textSecondary }]}>
@@ -556,6 +562,9 @@ export default function HomeScreen() {
                         {artisan.full_name ?? t('Artisan')}
                       </Text>
                       <Text style={styles.artisanMeta} numberOfLines={1}>
+                        {artisan.business_type
+                          ? `${artisan.business_type === 'enterprise' ? t('Entreprise') : t('Sous-traitance')} · `
+                          : ''}
                         {artisan.profession ?? t('Professionnel')} · {formatDistance(artisan.distance_m)}
                       </Text>
                     </TouchableOpacity>

@@ -32,7 +32,7 @@ type Quote = {
 
 export default function DashboardScreen() {
   const router = useRouter();
-  const { session, profile, refreshProfile, signOut } = useAuth();
+  const { session, profile, businessAccess, refreshProfile, signOut } = useAuth();
   const theme = useTheme();
   const t = useTranslate();
   const { preferences } = useUserPreferences();
@@ -220,6 +220,28 @@ export default function DashboardScreen() {
           </View>
         </View>
 
+        <TouchableOpacity
+          style={[styles.businessVerificationCard, { backgroundColor: theme.backgroundElement }]}
+          onPress={() => router.push('/business-verification')}
+          accessibilityRole="button">
+          <View style={[styles.businessVerificationIcon, { backgroundColor: `${theme.accent}18` }]}>
+            <Ionicons name="business-outline" size={21} color={theme.accent} />
+          </View>
+          <View style={styles.flex}>
+            <Text style={[styles.cardTitle, { color: theme.text }]}>
+              {profile?.business_type === 'enterprise'
+                ? t('Entreprise vérifiée')
+                : profile?.business_type === 'subcontractor'
+                  ? t('Sous-traitance vérifiée')
+                  : t('Demander un statut entreprise')}
+            </Text>
+            <Text style={[styles.muted, { color: theme.textSecondary }]}>
+              {t('Suivre ou envoyer une demande de vérification')}
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={theme.textSecondary} />
+        </TouchableOpacity>
+
         <View style={styles.stats}>
           <Stat label="Nouvelles demandes" value={quotes.filter(isNew).length} color="#F5A623" theme={theme} t={t} />
           <Stat label="En cours" value={count('accepted')} color="#007AFF" theme={theme} t={t} />
@@ -340,6 +362,38 @@ export default function DashboardScreen() {
             </View>
             <Text style={styles.drawerSection}>{t('ESPACE ARTISAN')}</Text>
             <DrawerItem
+              label="Statut entreprise"
+              icon="business-outline"
+              onPress={() => {
+                setDrawerVisible(false);
+                router.push('/business-verification');
+              }}
+              theme={theme}
+              t={t}
+            />
+            {businessAccess && (
+              <DrawerItem
+                label="Espace entreprise"
+                icon="business-outline"
+                onPress={() => {
+                  setDrawerVisible(false);
+                  router.push('/business');
+                }}
+                theme={theme}
+                t={t}
+              />
+            )}
+            <DrawerItem
+              label="Demandes des entreprises"
+              icon="briefcase-outline"
+              onPress={() => {
+                setDrawerVisible(false);
+                router.push('/business-jobs');
+              }}
+              theme={theme}
+              t={t}
+            />
+            <DrawerItem
               label="Demandes reçues"
               icon="briefcase-outline"
               onPress={() => {
@@ -435,6 +489,7 @@ function ActionButton(props: { label: string; color: string; onPress: () => void
 
 const styles = StyleSheet.create({
   safe: { flex: 1 },
+  flex: { flex: 1 },
   center: { flex: 1 },
   content: { padding: 16, paddingBottom: 28, gap: 16 },
   header: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 4 },
@@ -446,6 +501,8 @@ const styles = StyleSheet.create({
   subtitle: { fontSize: 13, marginTop: 2 },
   card: { borderRadius: 16, padding: 16, gap: 4 },
   availabilityCard: { borderRadius: 16, padding: 16 },
+  businessVerificationCard: { minHeight: 72, borderRadius: 16, padding: 13, flexDirection: 'row', alignItems: 'center', gap: 12 },
+  businessVerificationIcon: { width: 42, height: 42, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
   row: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   availabilityCopy: { flex: 1, gap: 5 },
   availabilityTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },

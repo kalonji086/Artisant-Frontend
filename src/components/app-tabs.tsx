@@ -108,6 +108,8 @@ export default function AppTabs() {
           tabBarStyle: { display: 'none' },
         }}
       />
+      <Tabs.Screen name="business" options={{ href: null, title: t('Espace entreprise') }} />
+      <Tabs.Screen name="business-jobs" options={{ href: null, title: t('Demandes des entreprises') }} />
       {/* Écran de recherche : accessible via navigation, caché des onglets */}
       <Tabs.Screen
         name="search"
@@ -130,6 +132,7 @@ export default function AppTabs() {
       <Tabs.Screen name="(auth)/reset-password" options={{ href: null, title: t('Nouveau mot de passe'), tabBarStyle: { display: 'none' } }} />
       <Tabs.Screen name="(auth)/help" options={{ href: null, title: t('Centre d’aide'), tabBarStyle: { display: 'none' } }} />
       <Tabs.Screen name="(auth)/support-request" options={{ href: null, title: t('Écrire au support'), tabBarStyle: { display: 'none' } }} />
+      <Tabs.Screen name="(auth)/business-invite" options={{ href: null, title: t('Invitation entreprise'), tabBarStyle: { display: 'none' } }} />
       <Tabs.Screen name="(auth)/legal/[slug]" options={{ href: null, title: t('Informations légales'), tabBarStyle: { display: 'none' } }} />
     </Tabs>
   );

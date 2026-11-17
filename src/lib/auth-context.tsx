@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { Session } from '@supabase/supabase-js';
 import { Alert } from 'react-native';
 import { supabase } from '@/lib/supabase-client';
-import api from '@/lib/api';
+import { setAuthToken } from '@/lib/api';
 import { unregisterPushToken } from '@/lib/push-notifications';
 import { uploadPendingArtisanAvatar } from '@/lib/artisan-avatar';
 import { clearRememberedCredentials } from '@/lib/remembered-credentials';
@@ -20,11 +20,18 @@ export type Profile = {
   description: string | null;
   is_available: boolean | null;
   rating: number | null;
+  business_type: 'enterprise' | 'subcontractor' | null;
 };
+
+export type BusinessAccess = {
+  owner_id: string;
+  role: 'owner' | 'employee';
+} | null;
 
 type AuthState = {
   session: Session | null;
   profile: Profile | null;
+  businessAccess: BusinessAccess;
   loading: boolean;
   profileLoading: boolean;
   profileError: string | null;
@@ -37,6 +44,7 @@ const AuthContext = createContext<AuthState | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [businessAccess, setBusinessAccess] = useState<BusinessAccess>(null);
   const [loading, setLoading] = useState(true);
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
@@ -56,6 +64,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setProfileError(null);
     if (!userId) {
       setProfile(null);
+      setBusinessAccess(null);
       setProfileLoading(false);
       return;
     }
@@ -72,14 +81,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const { data, error } = await supabase
         .from('profiles')
-        .select('id, full_name, avatar_url, phone, role, profession, city, description, is_available, rating')
+        .select('id, full_name, avatar_url, phone, role, profession, city, description, is_available, rating, business_type')
         .eq('id', userId)
         .abortSignal(controller.signal)
         .maybeSingle();
 
       if (error) throw error;
       if (!data) throw new Error('Profil introuvable pour ce compte.');
-      if (requestId === profileRequestId.current) setProfile(data as Profile);
+      if (requestId === profileRequestId.current) {
+        const nextProfile = data as Profile;
+        setProfile(nextProfile);
+        if (nextProfile.business_type) {
+          setBusinessAccess({ owner_id: userId, role: 'owner' });
+        } else {
+          const { data: membership, error: membershipError } = await supabase
+            .from('business_members')
+            .select('owner_id')
+            .eq('member_user_id', userId)
+            .eq('status', 'active')
+            .maybeSingle();
+          if (requestId !== profileRequestId.current) return;
+          if (membershipError) {
+            console.error('[auth] Vérification de l’accès employé impossible:', membershipError);
+            setBusinessAccess(null);
+          } else {
+            setBusinessAccess(membership ? { owner_id: membership.owner_id, role: 'employee' } : null);
+          }
+        }
+      }
     } catch (error) {
       if (requestId !== profileRequestId.current) return;
       const message = timedOut
@@ -89,6 +118,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           : 'Impossible de charger le profil.';
       console.error('[auth] Chargement du profil impossible:', error);
       setProfile(null);
+      setBusinessAccess(null);
       setProfileError(message);
     } finally {
       clearTimeout(timeout);
@@ -122,6 +152,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         console.error('[auth] Restauration de session impossible:', error);
         setSession(null);
         setProfile(null);
+        setBusinessAccess(null);
         setProfileLoading(false);
       })
       .finally(() => {
@@ -132,7 +163,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { data: sub } = supabase.auth.onAuthStateChange((event, next) => {
       setSession(next);
       // Les écrans qui passent par l'API Express lisent ce token.
-      api.setAuthToken(next?.access_token ?? null).catch(() => {});
+      setAuthToken(next?.access_token ?? null).catch(() => {});
       if (event === 'INITIAL_SESSION') return;
       setProfileError(null);
       setProfileLoading(!!next?.user.id);
@@ -184,7 +215,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return;
         }
         setProfile(payload.new as Profile);
+        const nextProfile = payload.new as Profile;
         setProfileError(null);
+        if (nextProfile.business_type) {
+          setBusinessAccess({ owner_id: userId, role: 'owner' });
+        } else {
+          void supabase
+            .from('business_members')
+            .select('owner_id')
+            .eq('member_user_id', userId)
+            .eq('status', 'active')
+            .maybeSingle()
+            .then(({ data, error }) => {
+              if (error) {
+                console.error('[auth] Actualisation de l’accès employé impossible:', error);
+                return;
+              }
+              setBusinessAccess(data ? { owner_id: data.owner_id, role: 'employee' } : null);
+            });
+        }
       })
       .subscribe((status) => {
         if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
@@ -197,10 +246,51 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [session?.user.id]);
 
+  useEffect(() => {
+    const userId = session?.user.id;
+    if (!userId) return;
+    let active = true;
+    const channel = supabase
+      .channel(`business-membership-live-${userId}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'business_members',
+        filter: `member_user_id=eq.${userId}`,
+      }, () => {
+        void supabase
+          .from('business_members')
+          .select('owner_id')
+          .eq('member_user_id', userId)
+          .eq('status', 'active')
+          .maybeSingle()
+          .then(({ data, error }) => {
+            if (!active) return;
+            if (error) {
+              console.error('[auth] Actualisation de l’accès employé impossible:', error);
+              return;
+            }
+            if (profile?.business_type) return;
+            setBusinessAccess(data ? { owner_id: data.owner_id, role: 'employee' } : null);
+          });
+      })
+      .subscribe((status) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn('[auth] Synchronisation de l’accès employé indisponible:', status);
+        }
+      });
+
+    return () => {
+      active = false;
+      void supabase.removeChannel(channel);
+    };
+  }, [session?.user.id, profile?.business_type]);
+
   const value = useMemo<AuthState>(
     () => ({
       session,
       profile,
+      businessAccess,
       loading,
       profileLoading,
       profileError,
@@ -222,9 +312,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           console.warn('[auth] Suppression des identifiants mémorisés impossible:', storageError);
         }
         setProfile(null);
+        setBusinessAccess(null);
       },
     }),
-    [session, profile, loading, profileLoading, profileError, loadProfile]
+    [session, profile, businessAccess, loading, profileLoading, profileError, loadProfile]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

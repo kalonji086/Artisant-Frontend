@@ -8,7 +8,7 @@ import { useTranslate } from '@/lib/user-preferences-context';
 
 export default function ProfileScreen() {
   const router = useRouter();
-  const { profile, session, signOut } = useAuth();
+  const { profile, session, businessAccess, signOut } = useAuth();
   const theme = useTheme();
   const t = useTranslate();
 
@@ -71,6 +71,26 @@ export default function ProfileScreen() {
           <TouchableOpacity style={[styles.secondaryButton, { backgroundColor: theme.backgroundElement }]} onPress={() => router.push('/dashboard')}>
             <Ionicons name="grid-outline" size={19} color={theme.accent} />
             <Text style={[styles.secondaryButtonText, { color: theme.text }]}>{t('Ouvrir mon tableau de bord')}</Text>
+          </TouchableOpacity>
+        )}
+
+        {businessAccess && (
+          <TouchableOpacity
+            style={[styles.secondaryButton, { backgroundColor: theme.backgroundElement }]}
+            onPress={() => router.push('/business')}
+            accessibilityRole="button">
+            <Ionicons name="business-outline" size={19} color={theme.accent} />
+            <Text style={[styles.secondaryButtonText, { color: theme.text }]}>{t('Espace entreprise')}</Text>
+          </TouchableOpacity>
+        )}
+
+        {profile?.role === 'artisan' && (
+          <TouchableOpacity
+            style={[styles.secondaryButton, { backgroundColor: theme.backgroundElement }]}
+            onPress={() => router.push('/business-jobs')}
+            accessibilityRole="button">
+            <Ionicons name="briefcase-outline" size={19} color={theme.accent} />
+            <Text style={[styles.secondaryButtonText, { color: theme.text }]}>{t('Demandes des entreprises')}</Text>
           </TouchableOpacity>
         )}
 

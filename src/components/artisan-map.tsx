@@ -11,6 +11,7 @@ export type MapArtisan = {
   avatar_url: string | null;
   latitude: number;
   longitude: number;
+  business_type?: 'enterprise' | 'subcontractor' | null;
 };
 
 type Props = {
@@ -40,6 +41,7 @@ export function ArtisanMap({ center, artisans, onSelect, height = 260, fullScree
         name: esc(a.full_name ?? 'Artisan'),
         job: esc(a.profession),
         avatar: safeImageUrl(a.avatar_url),
+        businessType: a.business_type ?? null,
       })),
     ).replace(/</g, '\\u003c');
     return `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -69,7 +71,8 @@ function drawMap(){
       var image=a.avatar?'<img src="'+a.avatar+'" onerror="this.style.display=\\'none\\'">':'';
       var marker=L.divIcon({className:'',html:'<div class="artisan-pin"><span>'+a.name.charAt(0).toUpperCase()+'</span>'+image+'</div>',iconSize:[42,42],iconAnchor:[21,21]});
       var item=L.marker([a.lat,a.lng],{icon:marker}).addTo(map);
-      item.bindPopup('<b>'+a.name+'</b><br>'+a.job);
+      var businessLabel=a.businessType==='enterprise'?'Entreprise':a.businessType==='subcontractor'?'Sous-traitance':'';
+      item.bindPopup('<b>'+a.name+'</b><br>'+a.job+(businessLabel?'<br><strong>'+businessLabel+' vérifiée</strong>':''));
       item.on('click',function(){if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(a.id)});
       points.push([a.lat,a.lng]);
     });

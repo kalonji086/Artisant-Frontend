@@ -104,7 +104,8 @@ function AuthGuard() {
     authPage === 'reset-password'
     || authPage === 'legal'
     || authPage === 'help'
-    || authPage === 'support-request';
+    || authPage === 'support-request'
+    || authPage === 'business-invite';
   const userId = session?.user.id;
   const role = profile?.role;
 
